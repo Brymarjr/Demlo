@@ -1,0 +1,14 @@
+# Visual Studio temporary files and caches
+.vs/
+[Db]db.lock
+*.user
+*.userosscache
+*.sln.docstates
+
+# Build outputs
+bin/
+obj/
+
+# Node files for our upcoming Next.js project
+node_modules/
+.next/

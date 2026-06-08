@@ -1,0 +1,7 @@
+<Solution>
+  <Project Path="PeerLend.Api/PeerLend.Api.csproj" />
+  <Project Path="PeerLend.Application/PeerLend.Application.csproj" />
+  <Project Path="PeerLend.Domain/PeerLend.Domain.csproj" />
+  <Project Path="PeerLend.Infrastructure/PeerLend.Infrastructure.csproj" />
+  <Project Path="PeerLend.Workers/PeerLend.Workers.csproj" />
+</Solution>
