@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using PeerLend.Infrastructure;
 using PeerLend.Infrastructure.Persistence;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -13,6 +14,9 @@ builder.Services.AddDbContext<PeerLendDbContext>(options =>
         b => b.MigrationsAssembly("PeerLend.Infrastructure")
     )
 );
+
+// --- Core Infrastructure Services Registration ---
+builder.Services.AddInfrastructureServices(builder.Configuration);
 
 var app = builder.Build();
 
