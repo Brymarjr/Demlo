@@ -26,6 +26,14 @@ public static class DependencyInjection
         // Optimizes connection pooling and prevents socket leaks.
         services.AddHttpClient<ISmsService, TermiiSmsService>();
 
+        // Register the StackExchange Redis distributed cache provider.
+        // Fulfills Section 6.2 caching and expiration rules.
+        services.AddStackExchangeRedisCache(options =>
+        {
+            options.Configuration = configuration["RedisSettings:Url"] ?? "localhost:6379";
+            options.InstanceName = "PeerLend_";
+        });
+
         return services;
     }
 }
