@@ -18,6 +18,9 @@ public static class DependencyInjection
         // Register our business orchestration service
         services.AddTransient<IUserService, UserService>();
 
+        // Register our cryptographic identity token factor service
+        services.AddTransient<IJwtTokenService, JwtTokenService>();
+
         return services;
     }
 }
