@@ -134,6 +134,35 @@ public class UserService : IUserService
         });
     }
 
+    public async Task<bool> VerifyOtpAsync(VerifyOtpDto request, CancellationToken cancellationToken = default)
+    {
+        // 1. Reconstruct the standardized Redis lookup key (Section 6.2)
+        var cacheKey = $"otp:{request.PhoneNumber}";
+
+        // 2. Query our distributed Redis cache cluster for the stored token
+        var cachedOtp = await _cache.GetStringAsync(cacheKey, cancellationToken);
+
+        // 3. Fallback safely if token has naturally expired past its 5-minute lifespan
+        if (string.IsNullOrWhiteSpace(cachedOtp))
+        {
+            throw new InvalidOperationException("The verification code has expired or was never generated.");
+        }
+
+        // 4. Cryptographically cross-validate the strings
+        if (cachedOtp != request.Otp)
+        {
+            throw new ArgumentException("The submitted verification code is incorrect.");
+        }
+
+        // 5. Success: Purge the token from our cache cluster immediately to prevent replay attempts
+        await _cache.RemoveAsync(cacheKey, cancellationToken);
+
+        // NOTE: In the upcoming user status milestones, we will toggle the user's account status
+        // database property to IsPhoneVerified = true.
+
+        return true;
+    }
+
     // Generates an unguessable 6-digit numeric string using a Cryptographically Secure Pseudo-Random Number Generator (CSPRNG)
     private static string GenerateSecureOtp()
     {
