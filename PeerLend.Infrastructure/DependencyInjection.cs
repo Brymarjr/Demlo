@@ -1,5 +1,6 @@
 ﻿using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Http;
 using PeerLend.Application.Common.Interfaces;
 using PeerLend.Infrastructure.Services;
 
@@ -20,6 +21,10 @@ public static class DependencyInjection
 
         // Register our cryptographic identity token factor service
         services.AddTransient<IJwtTokenService, JwtTokenService>();
+
+        // Register the typed HttpClient pattern for Termii integration.
+        // Optimizes connection pooling and prevents socket leaks.
+        services.AddHttpClient<ISmsService, TermiiSmsService>();
 
         return services;
     }
