@@ -1,4 +1,6 @@
-﻿using Microsoft.EntityFrameworkCore;
+﻿using System.Security.Cryptography;
+using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Caching.Distributed;
 using PeerLend.Application.Common.Interfaces;
 using PeerLend.Application.DTOs;
 using PeerLend.Domain.Entities;
@@ -13,21 +15,28 @@ public class UserService : IUserService
 {
     private readonly PeerLendDbContext _context;
     private readonly ISecurityService _securityService;
+    private readonly ISmsService _smsService;
+    private readonly IDistributedCache _cache;
 
-    public UserService(PeerLendDbContext context, ISecurityService securityService)
+    // Inject our database context, security services, messaging clients, and Redis caching infrastructure
+    public UserService(
+        PeerLendDbContext context,
+        ISecurityService securityService,
+        ISmsService smsService,
+        IDistributedCache cache)
     {
         _context = context;
         _securityService = securityService;
+        _smsService = smsService;
+        _cache = cache;
     }
 
     public async Task<Guid> RegisterUserAsync(RegisterUserDto request, CancellationToken cancellationToken = default)
     {
-        // Enforce EF Core's native execution strategy to handle transient database connection retries safely
         var strategy = _context.Database.CreateExecutionStrategy();
 
         return await strategy.ExecuteAsync(async () =>
         {
-            // Open an atomic database transaction block to guarantee cross-profile consistency
             using var transaction = await _context.Database.BeginTransactionAsync(cancellationToken);
             try
             {
@@ -47,7 +56,7 @@ public class UserService : IUserService
                     throw new InvalidOperationException("A user account with this email or phone number is already registered.");
                 }
 
-                // 3. Transform data parameters using our security engine
+                // 3. Transform sensitive identifiers using our security engine
                 var passwordHash = _securityService.HashPassword(request.Password);
                 var bvnHash = _securityService.HashIdentity(request.Bvn);
                 var ninHash = _securityService.HashIdentity(request.Nin);
@@ -72,7 +81,7 @@ public class UserService : IUserService
                     var borrowerProfile = new BorrowerProfile
                     {
                         UserId = user.Id,
-                        CreditScore = 300, // Baseline statutory score
+                        CreditScore = 300,
                         MaxLoanLimitKobo = 0,
                         IncomeKobo = 0,
                         BankAccountId = string.Empty
@@ -93,6 +102,25 @@ public class UserService : IUserService
 
                 await _context.SaveChangesAsync(cancellationToken);
 
+                // 6. Cryptographically Generate Onboarding OTP Token (PL-16)
+                var otpCode = GenerateSecureOtp();
+
+                // 7. Commit Token to Redis Cache with a strict 5-Minute Lifespan (Section 6.2)
+                var cacheKey = $"otp:{user.PhoneNumber}";
+                var cacheOptions = new DistributedCacheEntryOptions
+                {
+                    AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(5)
+                };
+                await _cache.SetStringAsync(cacheKey, otpCode, cacheOptions, cancellationToken);
+
+                // 8. Fire OTP Outbound via Termii Communication Gateway
+                // Executed asynchronously right before transaction completion
+                var smsDispatched = await _smsService.SendVerificationOtpAsync(user.PhoneNumber, otpCode, cancellationToken);
+                if (!smsDispatched)
+                {
+                    Console.WriteLine($"[WARNING] Automated OTP notification delivery failed for user: {user.Id}");
+                }
+
                 // Commit the physical database transaction safely
                 await transaction.CommitAsync(cancellationToken);
 
@@ -100,10 +128,16 @@ public class UserService : IUserService
             }
             catch
             {
-                // Roll back the entire transaction if any part fails to prevent data corruption
                 await transaction.RollbackAsync(cancellationToken);
                 throw;
             }
         });
+    }
+
+    // Generates an unguessable 6-digit numeric string using a Cryptographically Secure Pseudo-Random Number Generator (CSPRNG)
+    private static string GenerateSecureOtp()
+    {
+        // Enforces cryptographically strong randomization to eliminate predictability vectors
+        return RandomNumberGenerator.GetInt32(100000, 999999).ToString();
     }
 }
