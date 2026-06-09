@@ -1,4 +1,5 @@
-﻿using PeerLend.Domain.Entities;
+﻿using System.Security.Claims;
+using PeerLend.Domain.Entities;
 
 namespace PeerLend.Application.Common.Interfaces;
 
@@ -11,4 +12,10 @@ public interface IJwtTokenService
 
     // Generates a cryptographically strong, unique refresh token string.
     string GenerateRefreshToken();
+
+    // Persists an active refresh token tracking record to the database (PL-22)
+    Task SaveRefreshTokenAsync(Guid userId, string token, string jwtId, CancellationToken cancellationToken = default);
+
+    // Extracts claims principal configurations from an expired token payload to verify session identity (PL-22)
+    ClaimsPrincipal GetPrincipalFromExpiredToken(string token);
 }
