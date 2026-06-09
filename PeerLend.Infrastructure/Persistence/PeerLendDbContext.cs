@@ -14,6 +14,7 @@ public class PeerLendDbContext : DbContext
 
     // --- Identity Sets ---
     public DbSet<User> Users => Set<User>();
+    public DbSet<RefreshToken> RefreshTokens { get; set; } = null!;
     public DbSet<BorrowerProfile> BorrowerProfiles => Set<BorrowerProfile>();
     public DbSet<LenderProfile> LenderProfiles => Set<LenderProfile>();
 
@@ -53,6 +54,7 @@ public class PeerLendDbContext : DbContext
 
         // Apply our global schema naming conventions across all generated tables
         modelBuilder.Entity<User>().ToTable("users");
+        modelBuilder.Entity<RefreshToken>().ToTable("refresh_tokens");
         modelBuilder.Entity<BorrowerProfile>().ToTable("borrower_profiles");
         modelBuilder.Entity<LenderProfile>().ToTable("lender_profiles");
         modelBuilder.Entity<Loan>().ToTable("loans");
