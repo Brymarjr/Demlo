@@ -37,6 +37,9 @@ public static class DependencyInjection
         // Register the typed HttpClient pattern for Smile ID compliance validation.
         services.AddHttpClient<IKycService, SmileIdKycService>();
 
+        // Register the typed HttpClient pattern for Mono Open Banking data retrieval.
+        services.AddHttpClient<IOpenBankingService, MonoOpenBankingService>();
+
         return services;
     }
 }
