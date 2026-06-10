@@ -34,6 +34,9 @@ public static class DependencyInjection
             options.InstanceName = "PeerLend_";
         });
 
+        // Register the typed HttpClient pattern for Smile ID compliance validation.
+        services.AddHttpClient<IKycService, SmileIdKycService>();
+
         return services;
     }
 }
