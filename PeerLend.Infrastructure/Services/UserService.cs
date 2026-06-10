@@ -21,20 +21,23 @@ public class UserService : IUserService
     private readonly ISmsService _smsService;
     private readonly IDistributedCache _cache;
     private readonly IJwtTokenService _tokenService;
+    private readonly IKycService _kycService;
 
-    // Inject our database context, security services, messaging clients, and Redis caching infrastructure
+    // Inject our database context, security services, messaging clients, Redis caching token engine, and KYC service
     public UserService(
         PeerLendDbContext context,
         ISecurityService securityService,
         ISmsService smsService,
         IDistributedCache cache,
-        IJwtTokenService tokenService)
+        IJwtTokenService tokenService,
+        IKycService kycService)
     {
         _context = context;
         _securityService = securityService;
         _smsService = smsService;
         _cache = cache;
         _tokenService = tokenService;
+        _kycService = kycService;
     }
 
     public async Task<Guid> RegisterUserAsync(RegisterUserDto request, CancellationToken cancellationToken = default)
@@ -142,29 +145,59 @@ public class UserService : IUserService
 
     public async Task<bool> VerifyOtpAsync(VerifyOtpDto request, CancellationToken cancellationToken = default)
     {
-        // 1. Reconstruct the standardized Redis lookup key (Section 6.2)
         var cacheKey = $"otp:{request.PhoneNumber}";
 
-        // 2. Query our distributed Redis cache cluster for the stored token
+        // 1. Fetch the active OTP sequence currently retained inside our Redis cache store
         var cachedOtp = await _cache.GetStringAsync(cacheKey, cancellationToken);
 
-        // 3. Fallback safely if token has naturally expired past its 5-minute lifespan
-        if (string.IsNullOrWhiteSpace(cachedOtp))
+        // ◄ CHANGED: request.OtpCode modified to request.Otp to match your DTO model
+        if (string.IsNullOrEmpty(cachedOtp) || cachedOtp != request.Otp)
         {
-            throw new InvalidOperationException("The verification code has expired or was never generated.");
+            throw new ArgumentException("The submitted verification token is invalid or has expired.");
         }
 
-        // 4. Cryptographically cross-validate the strings
-        if (cachedOtp != request.Otp)
+        // 2. Fetch the target user profile configuration out of PostgreSQL to acquire compliance identities
+        var user = await _context.Users.FirstOrDefaultAsync(u => u.PhoneNumber == request.PhoneNumber, cancellationToken);
+        if (user == null)
         {
-            throw new ArgumentException("The submitted verification code is incorrect.");
+            throw new InvalidOperationException("No user account matching the validated phone metadata could be discovered.");
         }
 
-        // 5. Success: Purge the token from our cache cluster immediately to prevent replay attempts
+        // 3. Purge the consumed OTP sequence from our Redis cluster to prevent token replay leaks
         await _cache.RemoveAsync(cacheKey, cancellationToken);
 
-        // NOTE: In the upcoming user status milestones, we will toggle the user's account status
-        // database property to IsPhoneVerified = true.
+        // 4. AUTOMATED KYC KICKOFF LOOP (Section 6.3): Dispatch async requests directly to Smile ID
+        Console.WriteLine($"[KYC TRIGGER] Phone verification successful for User {user.Id}. Initializing asynchronous compliance validation paths.");
+
+        // Dispatch BVN registration matching asynchronously
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                // ◄ CHANGED: user.Bvn modified to user.BvnHash to match your Domain Entity
+                var bvnResult = await _kycService.VerifyBvnAsync(user, user.BvnHash, CancellationToken.None);
+                Console.WriteLine($"[KYC BACKGROUND DISPATCH] BVN job submission state for user {user.Id}: {bvnResult}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[CRITICAL KYC BACKGROUND FAULT] Failed to forward BVN task context: {ex.Message}");
+            }
+        }, CancellationToken.None);
+
+        // Dispatch NIN identity verification records asynchronously
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                // ◄ CHANGED: user.Nin modified to user.NinHash to match your Domain Entity
+                var ninResult = await _kycService.VerifyNinAsync(user, user.NinHash, CancellationToken.None);
+                Console.WriteLine($"[KYC BACKGROUND DISPATCH] NIN job submission state for user {user.Id}: {ninResult}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[CRITICAL KYC BACKGROUND FAULT] Failed to forward NIN task context: {ex.Message}");
+            }
+        }, CancellationToken.None);
 
         return true;
     }
