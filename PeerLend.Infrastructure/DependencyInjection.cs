@@ -13,7 +13,7 @@ public static class DependencyInjection
     public static IServiceCollection AddInfrastructureServices(this IServiceCollection services, IConfiguration configuration)
     {
         // Register our cryptographic services with a Transient lifecycle.
-        // This ensures a fresh, lightweight instance is created every time a request is processed.
+        // This ensures a fresh, lightweight instance is created every time a request is processed (Transient).
         services.AddTransient<ISecurityService, SecurityService>();
 
         // Register our business orchestration service
