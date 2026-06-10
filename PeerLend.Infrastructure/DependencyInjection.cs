@@ -40,6 +40,9 @@ public static class DependencyInjection
         // Register the typed HttpClient pattern for Mono Open Banking data retrieval.
         services.AddHttpClient<IOpenBankingService, MonoOpenBankingService>();
 
+        // Register the typed HttpClient pattern for institutional credit history score retrieval.
+        services.AddHttpClient<ICreditBureauService, CrcCreditBureauService>();
+
         return services;
     }
 }
