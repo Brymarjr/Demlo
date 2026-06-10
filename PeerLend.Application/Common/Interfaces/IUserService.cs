@@ -10,4 +10,8 @@ public interface IUserService
 
     // Validates a user's submitted OTP against the Redis cache. Returns true on success.
     Task<bool> VerifyOtpAsync(VerifyOtpDto request, CancellationToken cancellationToken = default);
+
+    // Processes a token swap request by validating sessions and enforcing rotation rules.
+    // Returns a populated DTO package carrying fresh access and refresh token keys.
+    Task<TokenResponseDto> RefreshTokenAsync(TokenRequestDto request, CancellationToken cancellationToken = default);
 }

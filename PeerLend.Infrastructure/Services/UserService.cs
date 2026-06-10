@@ -1,11 +1,14 @@
-﻿using System.Security.Cryptography;
-using Microsoft.EntityFrameworkCore;
+﻿using Microsoft.EntityFrameworkCore;
+using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.Extensions.Caching.Distributed;
+using Microsoft.Extensions.Configuration;
+using Microsoft.IdentityModel.Tokens;
 using PeerLend.Application.Common.Interfaces;
 using PeerLend.Application.DTOs;
 using PeerLend.Domain.Entities;
 using PeerLend.Domain.Enums;
 using PeerLend.Infrastructure.Persistence;
+using System.Security.Cryptography;
 
 namespace PeerLend.Infrastructure.Services;
 
@@ -17,18 +20,21 @@ public class UserService : IUserService
     private readonly ISecurityService _securityService;
     private readonly ISmsService _smsService;
     private readonly IDistributedCache _cache;
+    private readonly IJwtTokenService _tokenService;
 
     // Inject our database context, security services, messaging clients, and Redis caching infrastructure
     public UserService(
         PeerLendDbContext context,
         ISecurityService securityService,
         ISmsService smsService,
-        IDistributedCache cache)
+        IDistributedCache cache,
+        IJwtTokenService tokenService)
     {
         _context = context;
         _securityService = securityService;
         _smsService = smsService;
         _cache = cache;
+        _tokenService = tokenService;
     }
 
     public async Task<Guid> RegisterUserAsync(RegisterUserDto request, CancellationToken cancellationToken = default)
@@ -161,6 +167,84 @@ public class UserService : IUserService
         // database property to IsPhoneVerified = true.
 
         return true;
+    }
+
+    public async Task<TokenResponseDto> RefreshTokenAsync(TokenRequestDto request, CancellationToken cancellationToken = default)
+    {
+        // 1. Extract user claims principal out of the expired incoming token safely
+        var principal = _tokenService.GetPrincipalFromExpiredToken(request.AccessToken);
+
+        var userIdClaim = principal.FindFirst(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Sub)?.Value;
+        if (string.IsNullOrEmpty(userIdClaim) || !Guid.TryParse(userIdClaim, out var userId))
+        {
+            throw new Microsoft.IdentityModel.Tokens.SecurityTokenException("Invalid token payload claims principal formatting.");
+        }
+
+        // 2. Fetch the refresh token record from PostgreSQL
+        var storedRefreshToken = await _context.RefreshTokens
+            .FirstOrDefaultAsync(t => t.Token == request.RefreshToken, cancellationToken);
+
+        if (storedRefreshToken == null)
+        {
+            throw new Microsoft.IdentityModel.Tokens.SecurityTokenException("The submitted refresh token does not exist.");
+        }
+
+        // 3. REPLAY ATTACK DETECTION (Section 5.3)
+        if (storedRefreshToken.IsUsed)
+        {
+            var activeUserTokens = await _context.RefreshTokens
+                .Where(t => t.UserId == userId && !t.IsRevoked)
+                .ToListAsync(cancellationToken);
+
+            foreach (var token in activeUserTokens)
+            {
+                token.IsRevoked = true;
+            }
+
+            await _context.SaveChangesAsync(cancellationToken);
+            throw new Microsoft.IdentityModel.Tokens.SecurityTokenException("Breach Warning: Refresh token reuse detected! All active sessions revoked.");
+        }
+
+        // 4. Validate expiration and revocation state invariants
+        if (storedRefreshToken.IsRevoked || storedRefreshToken.ExpiryDate <= DateTime.UtcNow)
+        {
+            throw new Microsoft.IdentityModel.Tokens.SecurityTokenException("The submitted refresh token has expired or has been revoked.");
+        }
+
+        // 5. Cross-reference JTI mapping constraints to ensure the token pairs match
+        var incomingJti = principal.FindFirst(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Jti)?.Value;
+        if (storedRefreshToken.JwtId != incomingJti)
+        {
+            throw new Microsoft.IdentityModel.Tokens.SecurityTokenException("Token binding configuration mismatch detected.");
+        }
+
+        var user = await _context.Users.FindAsync(new object[] { userId }, cancellationToken);
+        if (user == null)
+        {
+            throw new Microsoft.IdentityModel.Tokens.SecurityTokenException("User profile linked to token context could not be found.");
+        }
+
+        // 6. Enforce rotation sequence: Mark the old token as used
+        storedRefreshToken.IsUsed = true;
+
+        // 7. Spin up a brand new access token and high-entropy refresh token pair
+        var newAccessToken = _tokenService.GenerateAccessToken(user);
+        var newRefreshToken = _tokenService.GenerateRefreshToken();
+
+        // 8. Extract the new JTI tracking ID and save the new refresh token to PostgreSQL
+        var handler = new System.IdentityModel.Tokens.Jwt.JwtSecurityTokenHandler();
+        var decodedToken = handler.ReadJwtToken(newAccessToken);
+        var newJti = decodedToken.Claims.FirstOrDefault(c => c.Type == System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Jti)?.Value
+            ?? Guid.NewGuid().ToString();
+
+        await _tokenService.SaveRefreshTokenAsync(user.Id, newRefreshToken, newJti, cancellationToken);
+
+        return new TokenResponseDto
+        {
+            AccessToken = newAccessToken,
+            RefreshToken = newRefreshToken,
+            Message = "Token session rotated successfully."
+        };
     }
 
     // Generates an unguessable 6-digit numeric string using a Cryptographically Secure Pseudo-Random Number Generator (CSPRNG)
