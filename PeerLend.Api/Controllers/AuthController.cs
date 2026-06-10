@@ -110,4 +110,30 @@ public class AuthController : ControllerBase
             return StatusCode(StatusCodes.Status500InternalServerError, new { error = "An unexpected error occurred during phone verification." });
         }
     }
+
+    // Exposes the gateway endpoint to process token rotation and renewal requests (PL-25)
+    [HttpPost("refresh")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    public async Task<IActionResult> Refresh([FromBody] TokenRequestDto request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            // Forward the payload down to our token exchange logic engine
+            var result = await _userService.RefreshTokenAsync(request, cancellationToken);
+
+            return Ok(result);
+        }
+        catch (Microsoft.IdentityModel.Tokens.SecurityTokenException ex)
+        {
+            // Catches token security violations, expiration, or replay attack warnings
+            Console.WriteLine($"[SECURITY ALERT] Token Rotation Rejected: {ex.Message}");
+            return Unauthorized(new { error = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[CRITICAL DEFAULT] Token Refresh Failure: {ex}");
+            return StatusCode(StatusCodes.Status500InternalServerError, new { error = "An unexpected error occurred during session rotation." });
+        }
+    }
 }
