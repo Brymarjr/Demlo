@@ -2,20 +2,24 @@
 using Microsoft.EntityFrameworkCore;
 using PeerLend.Application.DTOs;
 using PeerLend.Infrastructure.Persistence;
-using Asp.Versioning; // Added for API version tracking attributes
+using Asp.Versioning;
+using PeerLend.Application.Common.Interfaces;
 
 namespace PeerLend.Api.Controllers;
 
 [ApiController]
-[ApiVersion("1.0")] // Explicitly locks this controller to Version 1
-[Route("api/v{version:apiVersion}/kyc")] // Dynamically changes the route to api/v1/kyc
+[ApiVersion("1.0")]
+[Route("api/v{version:apiVersion}/kyc")]
 public class KycController : ControllerBase
 {
     private readonly PeerLendDbContext _context;
+    private readonly IWalletService _walletService; // 1. Declare the private wallet field
 
-    public KycController(PeerLendDbContext context)
+    // 2. Inject IWalletService alongside the DbContext
+    public KycController(PeerLendDbContext context, IWalletService walletService)
     {
         _context = context;
+        _walletService = walletService;
     }
 
     [HttpPost("callback")]
@@ -46,6 +50,15 @@ public class KycController : ControllerBase
             if (request.ResultCodeGroup == 1)
             {
                 Console.WriteLine($"[KYC SUCCESS] User identity verified via Smile ID for User: {userId}. Text: {request.ResultText}");
+
+                // 3. AUTOMATED WALLET PROVISIONING DISPATCH (PL-43)
+                Console.WriteLine($"[LEDGER TRIGGER] Provisioning secure double-entry financial ledger account for verified user: {userId}");
+                var walletAllocationSuccess = await _walletService.ProvisionUserWalletAsync(userId, cancellationToken);
+
+                if (!walletAllocationSuccess)
+                {
+                    Console.WriteLine($"[LEDGER ERROR CRITICAL] User identity passed, but database failed to allocate double-entry structures for User: {userId}");
+                }
             }
             else
             {
