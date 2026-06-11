@@ -43,6 +43,9 @@ public static class DependencyInjection
         // Register the typed HttpClient pattern for institutional credit history score retrieval.
         services.AddHttpClient<ICreditBureauService, CrcCreditBureauService>();
 
+        // Register the concrete Double-Entry Ledger Wallet Engine service infrastructure
+        services.AddScoped<IWalletService, WalletService>();
+
         return services;
     }
 }

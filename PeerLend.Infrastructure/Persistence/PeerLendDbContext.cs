@@ -25,6 +25,8 @@ public class PeerLendDbContext : DbContext
     // --- Double-Entry Ledger Sets ---
     public DbSet<LedgerAccount> LedgerAccounts => Set<LedgerAccount>();
     public DbSet<LedgerEntry> LedgerEntries => Set<LedgerEntry>();
+    public DbSet<PeerLend.Domain.Entities.Wallet> Wallets { get; set; } = null!;
+    public DbSet<PeerLend.Domain.Entities.Transaction> Transactions { get; set; } = null!;
 
     // Intercepts the persistence pipeline to enforce automated audit tracking metrics.
     // Overrides standard SaveChanges behavior to guarantee baseline data correctness.
