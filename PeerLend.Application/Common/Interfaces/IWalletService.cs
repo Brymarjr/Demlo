@@ -11,4 +11,12 @@ public interface IWalletService
 
     // Retrieves the current real-time clear balance for a specific user's wallet engine.
     Task<long> GetWalletBalanceAsync(Guid userId, CancellationToken cancellationToken = default);
+
+    // Executes a real-time ledger deposit or withdrawal for an internal wallet profile.
+    // Type parameters must strictly validate to "CREDIT" or "DEBIT".
+    Task<bool> ProcessTransactionAsync(Guid walletId, long amountKobo, string type, string description, CancellationToken cancellationToken = default);
+
+    // Executes a secure internal peer-to-peer wallet-to-wallet transfer between two users.
+    // Deducts from the sender and adds to the recipient under an atomic database transaction.
+    Task<bool> TransferFundsAsync(Guid senderUserId, Guid recipientUserId, long amountKobo, string description, CancellationToken cancellationToken = default);
 }
