@@ -55,6 +55,9 @@ public static class DependencyInjection
         // Register the concrete Repayment Engine tracking wallet debit recoveries
         services.AddScoped<IRepaymentService, RepaymentService>();
 
+        // Register the concrete Notification Service tracking communication streams
+        services.AddScoped<INotificationService, NotificationService>();
+
         return services;
     }
 }
