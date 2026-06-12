@@ -52,6 +52,9 @@ public static class DependencyInjection
         // Register the concrete Multi-Tier Automated Risk Underwriting Engine processor
         services.AddScoped<IUnderwritingEngine, UnderwritingEngine>();
 
+        // Register the concrete Repayment Engine tracking wallet debit recoveries
+        services.AddScoped<IRepaymentService, RepaymentService>();
+
         return services;
     }
 }
