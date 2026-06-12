@@ -6,16 +6,22 @@ using PeerLend.Infrastructure.Persistence;
 namespace PeerLend.Infrastructure.Services;
 
 // Implements the settlement engine tracking debt collections and ledger balance closures.
-// Enforces Section 11.2 atomic transaction guardrails to prevent double-spend anomalies.
+// Enforces Section 11.2 atomic transaction guardrails and dispatches receipt milestones.
 public class RepaymentService : IRepaymentService
 {
     private readonly PeerLendDbContext _context;
     private readonly ILoanService _loanService;
+    private readonly INotificationService _notificationService; // ◄ 1. Declare the private messaging field
 
-    public RepaymentService(PeerLendDbContext context, ILoanService loanService)
+    // 2. Inject INotificationService into the constructor alongside existing dependencies
+    public RepaymentService(
+        PeerLendDbContext context,
+        ILoanService loanService,
+        INotificationService notificationService)
     {
         _context = context;
         _loanService = loanService;
+        _notificationService = notificationService;
     }
 
     public async Task<long> CalculateOutstandingBalanceAsync(Guid loanId, CancellationToken cancellationToken = default)
@@ -23,13 +29,10 @@ public class RepaymentService : IRepaymentService
         var loan = await _context.Loans.FirstOrDefaultAsync(l => l.Id == loanId, cancellationToken);
         if (loan == null) return 0;
 
-        // Calculate total raw liability: Principal + simple daily interest parameter matching terms
-        // Total Interest = Principal * (InterestRateBps / 10000)
         double interestMultiplier = loan.InterestRateBps / 10000.0;
         long totalInterestKobo = (long)(loan.PrincipalAmountKobo * interestMultiplier);
         long totalPayableKobo = loan.PrincipalAmountKobo + totalInterestKobo;
 
-        // Fetch all successful repayments tracked under this loan asset context via description tag lookups
         var wallet = await _context.Wallets.FirstOrDefaultAsync(w => w.UserId == loan.BorrowerId, cancellationToken);
         if (wallet == null) return totalPayableKobo;
 
@@ -46,7 +49,6 @@ public class RepaymentService : IRepaymentService
         if (amountKobo <= 0)
             throw new ArgumentException("Repayment allocation processing metric must be greater than zero kobo.");
 
-        // 1. Initialize our atomic transactional framework boundary
         using var dbTransaction = await _context.Database.BeginTransactionAsync(cancellationToken);
 
         try
@@ -61,7 +63,9 @@ public class RepaymentService : IRepaymentService
             var borrowerWallet = await _context.Wallets.FirstOrDefaultAsync(w => w.UserId == loan.BorrowerId, cancellationToken);
             if (borrowerWallet == null) return false;
 
-            // Compute current real-time balance outstanding to prevent over-collection errors
+            var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == loan.BorrowerId, cancellationToken);
+            if (user == null) return false;
+
             long exactRemainingDebt = await CalculateOutstandingBalanceAsync(loanId, cancellationToken);
             if (exactRemainingDebt <= 0)
             {
@@ -69,10 +73,8 @@ public class RepaymentService : IRepaymentService
                 return false;
             }
 
-            // Cap the payment if the user provides an over-allocation amount
             long actualDeductionKobo = amountKobo > exactRemainingDebt ? exactRemainingDebt : amountKobo;
 
-            // Fetch current real-time wallet ledger balances to ensure the user has sufficient funds
             long currentWalletBalance = await _context.Transactions
                 .Where(t => t.WalletId == borrowerWallet.Id)
                 .SumAsync(t => t.Type == "CREDIT" ? t.AmountKobo : -t.AmountKobo, cancellationToken);
@@ -83,7 +85,6 @@ public class RepaymentService : IRepaymentService
                 return false;
             }
 
-            // 2. Add the double-entry DEBIT ledger record (Deducting funds out of user wallet)
             var paymentDebitRecord = new Domain.Entities.Transaction
             {
                 Id = Guid.NewGuid(),
@@ -97,8 +98,8 @@ public class RepaymentService : IRepaymentService
             await _context.Transactions.AddAsync(paymentDebitRecord, cancellationToken);
             await _context.SaveChangesAsync(cancellationToken);
 
-            // 3. Evaluate state mutation triggers if the debt is completely cleared out
-            if (actualDeductionKobo == exactRemainingDebt)
+            bool isFullySettled = (actualDeductionKobo == exactRemainingDebt);
+            if (isFullySettled)
             {
                 Console.WriteLine($"[REPAYMENT MATCH] Debt completely zeroed out. Closing down contract pipeline context.");
                 await _loanService.UpdateLoanStatusAsync(loanId, LoanStatus.ClosedRepaid, cancellationToken);
@@ -106,6 +107,18 @@ public class RepaymentService : IRepaymentService
 
             await dbTransaction.CommitAsync(cancellationToken);
             Console.WriteLine($"[REPAYMENT SUCCESS] Liquidated {actualDeductionKobo} Kobo against Asset {loanId}.");
+
+            // 3. AUTOMATED REPAYMENT TRANSACTION ALERT TRIGGER (PL-58)
+            double repaidInNaira = actualDeductionKobo / 100.0;
+            long postPaymentDebt = isFullySettled ? 0 : (exactRemainingDebt - actualDeductionKobo);
+            double remainingInNaira = postPaymentDebt / 100.0;
+
+            string smsPayloadText = isFullySettled
+                ? $"PeerLend Alert: Repayment of NGN {repaidInNaira:N2} received! Your loan (ID: {loanId.ToString()[..8]}) is now FULLY SETTLED. Thank you!"
+                : $"PeerLend Alert: Repayment of NGN {repaidInNaira:N2} received. Outstanding remaining balance: NGN {remainingInNaira:N2}.";
+
+            _ = _notificationService.SendSmsAsync(user.PhoneNumber ?? "+2348000000000", smsPayloadText, cancellationToken);
+
             return true;
         }
         catch (Exception ex)
