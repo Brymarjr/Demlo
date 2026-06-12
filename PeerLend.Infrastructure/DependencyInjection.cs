@@ -46,6 +46,9 @@ public static class DependencyInjection
         // Register the concrete Double-Entry Ledger Wallet Engine service infrastructure
         services.AddScoped<IWalletService, WalletService>();
 
+        // Register the concrete Loan Application and State Machine engine tracking infrastructure
+        services.AddScoped<ILoanService, LoanService>();
+
         return services;
     }
 }
