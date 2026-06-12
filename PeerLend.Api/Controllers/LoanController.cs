@@ -12,19 +12,20 @@ namespace PeerLend.Api.Controllers;
 public class LoanController : ControllerBase
 {
     private readonly ILoanService _loanService;
+    private readonly IUnderwritingEngine _underwritingEngine; // ◄ 1. Declare the private field
 
-    public LoanController(ILoanService loanService)
+    // 2. Inject IUnderwritingEngine alongside the LoanService
+    public LoanController(ILoanService loanService, IUnderwritingEngine underwritingEngine)
     {
         _loanService = loanService;
+        _underwritingEngine = underwritingEngine;
     }
 
-    // Intercepts inbound borrower terms and triggers the state machine initialization (PL-48)
     [HttpPost("apply")]
     [ProducesResponseType(StatusCodes.Status201Created)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> SubmitLoanApplication([FromBody] LoanApplicationDto request, CancellationToken cancellationToken)
     {
-        // Safely pull the user's identity out of the token context, bypassing client-side tampering
         var userIdentifierClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
 
         if (string.IsNullOrEmpty(userIdentifierClaim))
@@ -34,7 +35,7 @@ public class LoanController : ControllerBase
 
         var borrowerId = Guid.Parse(userIdentifierClaim);
 
-        // Dispatch variables directly down to our underlying infrastructure state engine
+        // 3. Formulate the loan asset inside the database (Starts at ApplicationSubmitted)
         var formulatedLoanAsset = await _loanService.SubmitApplicationAsync(
             borrowerId,
             request.PrincipalAmountKobo,
@@ -43,10 +44,14 @@ public class LoanController : ControllerBase
             cancellationToken
         );
 
+        // 4. AUTOMATED RISK MATRIX TRIGGER (PL-51)
+        // Fire the underwriting assessment instantly in the background to avoid blocking the user's response
+        _ = Task.Run(() => _underwritingEngine.EvaluateLoanRiskAsync(formulatedLoanAsset.Id, CancellationToken.None), CancellationToken.None);
+
         return CreatedAtAction(
             nameof(SubmitLoanApplication),
             new { id = formulatedLoanAsset.Id },
-            new { loanId = formulatedLoanAsset.Id, status = formulatedLoanAsset.Status.ToString(), message = "Loan application logged and queued into the underwriting pipeline successfully." }
+            new { loanId = formulatedLoanAsset.Id, status = formulatedLoanAsset.Status.ToString(), message = "Loan application logged and queued into the automated underwriting pipeline successfully." }
         );
     }
 }
