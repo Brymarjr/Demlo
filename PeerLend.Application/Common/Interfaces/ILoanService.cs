@@ -12,4 +12,8 @@ public interface ILoanService
 
     // Forces a secure, domain-validated status transition for a specific active loan asset.
     Task<bool> UpdateLoanStatusAsync(Guid loanId, LoanStatus newStatus, CancellationToken cancellationToken = default);
+
+    // Executes atomic financial disbursement for an approved loan asset.
+    // Debits platform treasury pools, credits borrower wallets, and updates lifecycle timestamps.
+    Task<bool> DisburseLoanAsync(Guid loanId, CancellationToken cancellationToken = default);
 }
