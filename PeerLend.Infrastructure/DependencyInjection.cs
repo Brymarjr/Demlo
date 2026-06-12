@@ -49,6 +49,9 @@ public static class DependencyInjection
         // Register the concrete Loan Application and State Machine engine tracking infrastructure
         services.AddScoped<ILoanService, LoanService>();
 
+        // Register the concrete Multi-Tier Automated Risk Underwriting Engine processor
+        services.AddScoped<IUnderwritingEngine, UnderwritingEngine>();
+
         return services;
     }
 }
