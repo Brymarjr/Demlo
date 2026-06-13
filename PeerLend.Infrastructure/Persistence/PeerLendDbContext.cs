@@ -17,6 +17,8 @@ public class PeerLendDbContext : DbContext
     public DbSet<RefreshToken> RefreshTokens { get; set; } = null!;
     public DbSet<BorrowerProfile> BorrowerProfiles => Set<BorrowerProfile>();
     public DbSet<LenderProfile> LenderProfiles => Set<LenderProfile>();
+    public DbSet<GlobalPolicy> GlobalPolicies { get; set; }
+    public DbSet<AuditLog> AuditLogs { get; set; }
 
     // --- Core Financial Sets ---
     public DbSet<Loan> Loans => Set<Loan>();
@@ -63,6 +65,8 @@ public class PeerLendDbContext : DbContext
         modelBuilder.Entity<LoanAllocation>().ToTable("loan_allocations");
         modelBuilder.Entity<LedgerAccount>().ToTable("ledger_accounts");
         modelBuilder.Entity<LedgerEntry>().ToTable("ledger_entries");
+        modelBuilder.Entity<GlobalPolicy>().ToTable("global_policies");
+        modelBuilder.Entity<AuditLog>().ToTable("audit_logs");
 
         // Enforce specific decimal precision and scaling constraints directly on backing models
         // For example, mapping Loan statuses explicitly to integer enumerations inside the engine.

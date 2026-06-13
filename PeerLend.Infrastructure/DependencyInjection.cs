@@ -58,6 +58,9 @@ public static class DependencyInjection
         // Register the concrete Notification Service tracking communication streams
         services.AddScoped<INotificationService, NotificationService>();
 
+        // Register the dynamic Governance Configuration Engine tracking corporate audits
+        services.AddScoped<IGlobalPolicyEngine, GlobalPolicyEngine>();
+
         return services;
     }
 }
