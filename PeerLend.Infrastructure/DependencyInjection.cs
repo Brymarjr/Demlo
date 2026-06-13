@@ -61,6 +61,9 @@ public static class DependencyInjection
         // Register the dynamic Governance Configuration Engine tracking corporate audits
         services.AddScoped<IGlobalPolicyEngine, GlobalPolicyEngine>();
 
+        // Register the high-throughput fractional multi-lender distribution engine
+        services.AddScoped<ILedgerLiquidationService, LedgerLiquidationService>();
+
         return services;
     }
 }
