@@ -57,10 +57,14 @@ public class GlobalPolicyEngine : IGlobalPolicyEngine
             var auditTrailRecord = new AuditLog
             {
                 Id = Guid.NewGuid(),
-                Actor = adminActor,
-                ActionType = "POLICY_ALTERATION",
-                Details = $"{{\"key\":\"{key}\",\"old_value\":\"{oldValue}\",\"new_value\":\"{newValue}\",\"machine\":\"{Environment.MachineName}\"}}",
-                Timestamp = DateTime.UtcNow
+                ActorId = Guid.Empty, // System admin identifier or parse user Guid context
+                EntityType = "GLOBAL_POLICY",
+                EntityId = Guid.Empty, // Target reference mapping identifier
+                Action = "POLICY_ALTERATION",
+                OldState = oldValue,
+                NewState = newValue,
+                Ip = Environment.MachineName,
+                CreatedAt = DateTime.UtcNow
             };
 
             await _context.AuditLogs.AddAsync(auditTrailRecord, cancellationToken);
