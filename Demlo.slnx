@@ -1,0 +1,8 @@
+<Solution>
+  <Project Path="Demlo.Api/Demlo.Api.csproj" />
+  <Project Path="Demlo.Application/Demlo.Application.csproj" />
+  <Project Path="Demlo.Domain/Demlo.Domain.csproj" />
+  <Project Path="Demlo.Infrastructure/Demlo.Infrastructure.csproj" />
+  <Project Path="Demlo.Tests.Integration/Demlo.Tests.Integration.csproj" />
+  <Project Path="Demlo.Workers/Demlo.Workers.csproj" />
+</Solution>
