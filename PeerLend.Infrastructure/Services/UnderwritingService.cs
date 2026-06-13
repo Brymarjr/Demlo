@@ -5,78 +5,71 @@ using PeerLend.Infrastructure.Persistence;
 
 namespace PeerLend.Infrastructure.Services;
 
-// Implements automated multi-tier underwriting evaluations (Layers 1, 2, and 3).
-// Enforces Section 4.4 credit score rules and risk threshold controls.
+// Implements automated multi-tier underwriting evaluations with dynamic policy fetching.
+// Utilizes senior performance tuning techniques to protect high-frequency operations.
 public class UnderwritingEngine : IUnderwritingEngine
 {
     private readonly PeerLendDbContext _context;
     private readonly ILoanService _loanService;
     private readonly ICreditBureauService _creditBureauService;
+    private readonly IGlobalPolicyEngine _policyEngine;
 
     public UnderwritingEngine(
         PeerLendDbContext context,
         ILoanService loanService,
-        ICreditBureauService creditBureauService)
+        ICreditBureauService creditBureauService,
+        IGlobalPolicyEngine policyEngine)
     {
         _context = context;
         _loanService = loanService;
         _creditBureauService = creditBureauService;
+        _policyEngine = policyEngine;
     }
 
     public async Task<bool> EvaluateLoanRiskAsync(Guid loanId, CancellationToken cancellationToken = default)
     {
-        // 1. Fetch the target loan alongside its tracking borrower profile details
-        var loan = await _context.Loans.FirstOrDefaultAsync(l => l.Id == loanId, cancellationToken);
-        if (loan == null)
-        {
-            Console.WriteLine($"[RISK CRITICAL] Evaluation aborted: Loan reference asset {loanId} not found.");
-            return false;
-        }
+        // SENIOR OPTIMIZATION: Read-only query performance tuning via AsNoTracking
+        var loan = await _context.Loans.AsNoTracking().FirstOrDefaultAsync(l => l.Id == loanId, cancellationToken);
+        if (loan == null) return false;
 
         try
         {
-            // 2. Advance state cleanly to KYC verification tracking
             var moveToKyc = await _loanService.UpdateLoanStatusAsync(loanId, LoanStatus.KycPending, cancellationToken);
             if (!moveToKyc) return false;
 
-            // Fetch the user data to evaluate compliance levels
-            var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == loan.BorrowerId, cancellationToken);
+            // Fetch user profile without overhead resource tracking
+            var user = await _context.Users.AsNoTracking().FirstOrDefaultAsync(u => u.Id == loan.BorrowerId, cancellationToken);
             if (user == null)
             {
                 await _loanService.UpdateLoanStatusAsync(loanId, LoanStatus.Rejected, cancellationToken);
                 return false;
             }
 
-            // [LAYER 1 & 2 EVALUATION MATCH]
-            // For testing purposes, we assume the user's explicit KYC data verification passes.
-            // If the user's national ID details are completely missing, we reject the application automatically.
             if (string.IsNullOrEmpty(user.BvnHash))
             {
-                Console.WriteLine($"[RISK REJECT] Borrower {user.Id} lacks valid identity token hash profiles. Aborting.");
                 await _loanService.UpdateLoanStatusAsync(loanId, LoanStatus.Rejected, cancellationToken);
                 return true;
             }
 
-            // 3. Advance state cleanly to official Credit Bureau grading
             var moveToScoring = await _loanService.UpdateLoanStatusAsync(loanId, LoanStatus.CreditScoring, cancellationToken);
             if (!moveToScoring) return false;
 
-            // [LAYER 3 EVALUATION - CRC BUREAU CHECK]
-            Console.WriteLine($"[RISK SCORING] Dispatching cryptographic token identity to CRC Credit Bureau registry framework...");
+            // Execute external registry checks OUTSIDE of any database transaction blocks to prevent table locks
             int institutionalCreditScore = await _creditBureauService.GetConsumerCreditScoreAsync(user, user.BvnHash, cancellationToken);
 
-            Console.WriteLine($"[RISK RESULT] CRC Bureau registry returned validation score rating: {institutionalCreditScore}");
+            // DYNAMIC POLICY LOOKUP
+            // Query the live global configuration database with a reliable fallback
+            string configuredCutoffString = await _policyEngine.GetPolicyValueAsync("MIN_CREDIT_SCORE_CUTOFF", "550", cancellationToken);
+            int minRequiredCreditScore = int.Parse(configuredCutoffString);
 
-            // 4. Evaluate score thresholds against algorithmic underwriting guardrails (Section 4.4)
-            // A score of 0 denotes a thin-file profile (no history). We accept thin-files at baseline or score >= 550.
-            if (institutionalCreditScore == 0 || institutionalCreditScore >= 550)
+            if (institutionalCreditScore == 0 || institutionalCreditScore >= minRequiredCreditScore)
             {
-                Console.WriteLine($"[RISK PASS] Credit metric parameters passed underwriting benchmarks. Approving asset.");
+                Console.WriteLine($"[RISK ANALYSIS] Passed dynamically configured cutoff threshold ({minRequiredCreditScore}). Approving.");
                 await _loanService.UpdateLoanStatusAsync(loanId, LoanStatus.Approved, cancellationToken);
             }
             else
             {
-                Console.WriteLine($"[RISK REJECT] Credit score rating {institutionalCreditScore} falls below risk constraints. Rejecting asset.");
+                Console.WriteLine($"[RISK ANALYSIS] Failed dynamically configured cutoff threshold ({minRequiredCreditScore}). Rejecting.");
                 await _loanService.UpdateLoanStatusAsync(loanId, LoanStatus.Rejected, cancellationToken);
             }
 
@@ -84,8 +77,7 @@ public class UnderwritingEngine : IUnderwritingEngine
         }
         catch (Exception ex)
         {
-            Console.WriteLine($"[RISK ENGINE FAULT] Unexpected exception handling automated risk assessment rules: {ex.Message}");
-            // Force a safe fallback down to rejection to prevent stuck processing states
+            Console.WriteLine($"[RISK ENGINE FAULT] Unexpected failure handling dynamic underwriting evaluation rules: {ex.Message}");
             await _loanService.UpdateLoanStatusAsync(loanId, LoanStatus.Rejected, cancellationToken);
             return false;
         }

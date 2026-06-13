@@ -70,33 +70,50 @@ public class LedgerIntegrationTests
     [Fact]
     public async Task EvaluateLoanRiskAsync_Should_Orchestrate_State_Waterfall_And_Approve_On_Valid_Credit()
     {
-        // 1. ARRANGE: Build a mock implementation of ICreditBureauService to simulate standard network responses
+        // 1. ARRANGE: Build mock implementations of dependencies to isolate memory contexts
         var context = GetInMemoryDbContext();
         var loanService = new LoanService(context, new NotificationService());
-
-        // Inline mock of the bureau service returning an excellent validation score (750 BPS credit score)
         var mockBureauService = new MockCreditBureauService(750);
-        var underwritingEngine = new UnderwritingEngine(context, loanService, mockBureauService);
+
+        // ──► ADD THIS: Inline mock to simulate the database returning a dynamic cutoff value of 550
+        var mockPolicyEngine = new MockGlobalPolicyEngine("550");
+
+        // Pass the 4th required argument straight into the constructor to clear error CS7036
+        var underwritingEngine = new UnderwritingEngine(context, loanService, mockBureauService, mockPolicyEngine);
 
         var borrowerId = Guid.NewGuid();
 
-        // Seed a valid user profile containing a valid national identity tracking token hash
         var user = new User { Id = borrowerId, BvnHash = "SHAHASH234234234", Email = "test@peerlend.com" };
         await context.Users.AddAsync(user);
         await context.SaveChangesAsync();
 
-        // Instantiate an active loan application record inside our data table (Starts as ApplicationSubmitted)
         var loan = await loanService.SubmitApplicationAsync(borrowerId, 500000, 1500, 30, CancellationToken.None);
 
-        // 2. ACT: Run the automated multi-tier risk evaluation pipeline matrix
+        // 2. ACT: Run the dynamic risk matrix validation pipeline
         var engineExecutionSuccess = await underwritingEngine.EvaluateLoanRiskAsync(loan.Id, CancellationToken.None);
 
-        // 3. ASSERT: Verify the risk evaluation pipeline cleared successfully
+        // 3. ASSERT: Verify structural correctness
         Assert.True(engineExecutionSuccess);
 
-        // Fetch the post-evaluation state out of disk storage to verify the outcome
         var evaluatedLoanAsset = await context.Loans.FirstAsync(l => l.Id == loan.Id);
-        Assert.Equal(LoanStatus.Approved, evaluatedLoanAsset.Status); // Must have transitioned cleanly to Approved
+        Assert.Equal(LoanStatus.Approved, evaluatedLoanAsset.Status);
+    }
+
+    // Lightweight mock companion helper matching IGlobalPolicyEngine requirements for testing insulation
+    private class MockGlobalPolicyEngine : IGlobalPolicyEngine
+    {
+        private readonly string _valueToReturn;
+        public MockGlobalPolicyEngine(string valueToReturn) => _valueToReturn = valueToReturn;
+
+        public Task<string> GetPolicyValueAsync(string key, string defaultValue, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(_valueToReturn);
+        }
+
+        public Task<bool> UpdatePolicyAsync(string key, string newValue, string adminActor, CancellationToken cancellationToken = default)
+        {
+            return Task.FromResult(true);
+        }
     }
 
     // Lightweight mock companion helper class matching ICreditBureauService requirements
