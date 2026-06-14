@@ -64,6 +64,9 @@ public static class DependencyInjection
         // Register the high-throughput fractional multi-lender distribution engine
         services.AddScoped<ILedgerLiquidationService, LedgerLiquidationService>();
 
+        // Register the typed HttpClient pattern for Paystack core payout execution
+        services.AddHttpClient<IPaystackDisbursementService, PaystackDisbursementService>();
+
         return services;
     }
 }
