@@ -4,7 +4,7 @@ using Demlo.Domain.Entities;
 
 namespace Demlo.Infrastructure.Persistence;
 
-// The primary data context acting as the bridge to PostgreSQL 18.
+// The primary data context acting as the bridge to PostgreSQL.
 // Enforces Section 4.1 and Section 4.2 of the Engineering Bible.
 public class DemloDbContext : DbContext
 {
@@ -14,12 +14,12 @@ public class DemloDbContext : DbContext
 
     // --- Identity Sets ---
     public DbSet<User> Users => Set<User>();
-    public DbSet<RefreshToken> RefreshTokens { get; set; } = null!;
+    public DbSet<RefreshToken> RefreshTokens => Set<RefreshToken>();
     public DbSet<BorrowerProfile> BorrowerProfiles => Set<BorrowerProfile>();
     public DbSet<LenderProfile> LenderProfiles => Set<LenderProfile>();
-    public DbSet<GlobalPolicy> GlobalPolicies { get; set; }
-    public DbSet<AuditLog> AuditLogs { get; set; }
-    public DbSet<FinancialLedgerLog> FinancialLedgerLogs { get; set; } = null!;
+    public DbSet<GlobalPolicy> GlobalPolicies => Set<GlobalPolicy>();
+    public DbSet<AuditLog> AuditLogs => Set<AuditLog>();
+    public DbSet<FinancialLedgerLog> FinancialLedgerLogs => Set<FinancialLedgerLog>();
 
     // --- Core Financial Sets ---
     public DbSet<Loan> Loans => Set<Loan>();
@@ -28,12 +28,13 @@ public class DemloDbContext : DbContext
     // --- Double-Entry Ledger Sets ---
     public DbSet<LedgerAccount> LedgerAccounts => Set<LedgerAccount>();
     public DbSet<LedgerEntry> LedgerEntries => Set<LedgerEntry>();
-    public DbSet<Demlo.Domain.Entities.Wallet> Wallets { get; set; } = null!;
-    public DbSet<Demlo.Domain.Entities.Transaction> Transactions { get; set; } = null!;
-    public DbSet<LedgerReconciliationAudit> LedgerReconciliationAudits { get; set; } = null!;
+    public DbSet<Wallet> Wallets => Set<Wallet>();
+    public DbSet<Transaction> Transactions => Set<Transaction>();
+    public DbSet<LedgerReconciliationAudit> LedgerReconciliationAudits => Set<LedgerReconciliationAudit>();
+    public DbSet<LenderRiskFundPool> LenderRiskFundPools => Set<LenderRiskFundPool>();
+    public DbSet<LenderRiskFundLedger> LenderRiskFundLedgers => Set<LenderRiskFundLedger>();
 
     // Intercepts the persistence pipeline to enforce automated audit tracking metrics.
-    // Overrides standard SaveChanges behavior to guarantee baseline data correctness.
     public override Task<int> SaveChangesAsync(CancellationToken cancellationToken = default)
     {
         var entries = ChangeTracker.Entries<BaseEntity>();
@@ -46,6 +47,12 @@ public class DemloDbContext : DbContext
             }
             else if (entry.State == EntityState.Modified)
             {
+                // CRITICAL FINANCIAL GUARDRAIL: Prohibit updating core append-only ledger transaction rows
+                if (entry.Entity is FinancialLedgerLog || entry.Entity is LenderRiskFundLedger)
+                {
+                    throw new InvalidOperationException($"Mutating immutable system tracking ledger rows of type '{entry.Entity.GetType().Name}' is unauthorized.");
+                }
+
                 entry.Entity.UpdatedAt = DateTime.UtcNow;
             }
         }
@@ -58,7 +65,7 @@ public class DemloDbContext : DbContext
     {
         base.OnModelCreating(modelBuilder);
 
-        // Apply our global schema naming conventions across all generated tables
+        // Apply our global snake_case schema naming conventions across all generated tables
         modelBuilder.Entity<User>().ToTable("users");
         modelBuilder.Entity<RefreshToken>().ToTable("refresh_tokens");
         modelBuilder.Entity<BorrowerProfile>().ToTable("borrower_profiles");
@@ -69,9 +76,14 @@ public class DemloDbContext : DbContext
         modelBuilder.Entity<LedgerEntry>().ToTable("ledger_entries");
         modelBuilder.Entity<GlobalPolicy>().ToTable("global_policies");
         modelBuilder.Entity<AuditLog>().ToTable("audit_logs");
+        modelBuilder.Entity<FinancialLedgerLog>().ToTable("financial_ledger_logs");
+        modelBuilder.Entity<Wallet>().ToTable("wallets");
+        modelBuilder.Entity<Transaction>().ToTable("transactions");
+        modelBuilder.Entity<LedgerReconciliationAudit>().ToTable("ledger_reconciliation_audits");
+        modelBuilder.Entity<LenderRiskFundPool>().ToTable("lender_risk_fund_pools");
+        modelBuilder.Entity<LenderRiskFundLedger>().ToTable("lender_risk_fund_ledgers");
 
-        // Enforce specific decimal precision and scaling constraints directly on backing models
-        // For example, mapping Loan statuses explicitly to integer enumerations inside the engine.
+        // Enforce specific conversions and scaling constraints directly on backing models
         modelBuilder.Entity<Loan>()
             .Property(l => l.Status)
             .HasConversion<int>();
