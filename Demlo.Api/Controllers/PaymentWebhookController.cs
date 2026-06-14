@@ -215,4 +215,54 @@ public class PaymentWebhookController : ControllerBase
             return StatusCode(StatusCodes.Status500InternalServerError, new { error = "Internal reconciliation processing failure." });
         }
     }
+
+    [HttpPost("paystack-manual-repayments")]
+    [ServiceFilter(typeof(PaystackWebhookVerificationFilter))] // ◄ CRYPTOGRAPHIC INTEGRITY GUARD
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> HandleManualPaystackRepayment([FromBody] PaystackWebhookDto payload, CancellationToken cancellationToken)
+    {
+        // 1. Verify this event is a successful user charge pay-in card/ussd event
+        if (payload.Event != "charge.success")
+        {
+            return Ok(new { message = "Event received but ignored (non-charge outcome)." });
+        }
+
+        // 2. Extract internal tracking reference metadata (e.g., manual_pay_{loanId}_{timestamp})
+        string reference = payload.Data.Reference;
+        if (string.IsNullOrEmpty(reference) || !reference.StartsWith("manual_pay_"))
+        {
+            return BadRequest(new { error = "Malformed manual repayment transaction reference." });
+        }
+
+        string[] parts = reference.Split('_');
+        if (parts.Length < 3 || !Guid.TryParse(parts[2], out Guid loanId))
+        {
+            return BadRequest(new { error = "Invalid metadata loan identifier payload." });
+        }
+
+        var loan = await _context.Loans.FirstOrDefaultAsync(l => l.Id == loanId, cancellationToken);
+        if (loan == null) return Ok(new { message = "No matching loan found for manual payment." });
+
+        // 3. Trigger immediate pro-rata distribution to lenders via liquidation engine
+        bool splitSuccess = await _ledgerLiquidationService.DistributeRepaymentAsync(loan.Id, payload.Data.Amount, cancellationToken);
+        if (!splitSuccess) return BadRequest(new { error = "Ledger distribution failed." });
+
+        // 4. Log the transaction inside our master double-entry logging table
+        await _ledgerService.LogTransactionAsync(
+            reference: reference,
+            transactionType: "MANUAL_REPAYMENT_CARD",
+            sourceAccountId: Guid.Empty, // Cash originated outside our database ecosystems
+            destinationAccountId: loan.BorrowerId,
+            amountKobo: payload.Data.Amount,
+            narrative: $"Manual user repayment cleared via Paystack checkout channels for Loan Ref: {loan.Id}",
+            cancellationToken: cancellationToken
+        );
+
+        // 5. If fully paid back, transition the state machine to close the contract asset
+        loan.TransitionTo(LoanStatus.ClosedRepaid);
+        await _context.SaveChangesAsync(cancellationToken);
+
+        return Ok(new { status = "MANUAL_PAYMENT_PROCESSED_SUCCESSFULLY" });
+    }
 }

@@ -9,6 +9,8 @@ var builder = WebApplication.CreateBuilder(args);
 // Register your custom API-layer cryptographic filter
 builder.Services.AddScoped<MonoWebhookVerificationFilter>();
 
+builder.Services.AddScoped<PaystackWebhookVerificationFilter>();
+
 // 1. Register Core MVC Controller Framework
 builder.Services.AddControllers();
 
