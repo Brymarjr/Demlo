@@ -19,6 +19,7 @@ public class DemloDbContext : DbContext
     public DbSet<LenderProfile> LenderProfiles => Set<LenderProfile>();
     public DbSet<GlobalPolicy> GlobalPolicies { get; set; }
     public DbSet<AuditLog> AuditLogs { get; set; }
+    public DbSet<FinancialLedgerLog> FinancialLedgerLogs { get; set; } = null!;
 
     // --- Core Financial Sets ---
     public DbSet<Loan> Loans => Set<Loan>();
