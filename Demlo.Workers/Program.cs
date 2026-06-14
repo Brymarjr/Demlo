@@ -67,6 +67,13 @@ public class Program
                 job => job.RunMatchingCycleAsync(CancellationToken.None),
                 "*/5 * * * *" // Strict standard 5-minute cron descriptor expressions
             );
+
+            Console.WriteLine("[HANGFIRE] Scheduling Asynchronous CRC Bureau Scoring Risk Evaluation Engine (Hourly)...");
+            recurringJobManager.AddOrUpdate<CreditBureauScoringJob>(
+                "automated-crc-bureau-underwriting",
+                job => job.ProcessPendingUnderwritingScoresAsync(CancellationToken.None),
+                Cron.Hourly()
+          );
         }
 
         Console.WriteLine("Workers engine running smoothly. Press Ctrl+C to safely terminate processing pipelines.");
