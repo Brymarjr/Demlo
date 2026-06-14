@@ -27,13 +27,24 @@ public class Program
                 services.AddDbContext<DemloDbContext>(options =>
                     options.UseNpgsql(connectionString, b => b.MigrationsAssembly("Demlo.Infrastructure")));
 
+                //  Core Infrastructure Services
                 services.AddScoped<ILoanService, LoanService>();
                 services.AddScoped<IGlobalPolicyEngine, GlobalPolicyEngine>();
                 services.AddScoped<INotificationService, NotificationService>();
+                
+                //  Financial & Third-Party Integrations
+                services.AddScoped<IFinancialLedgerService, FinancialLedgerService>();
+                services.AddHttpClient<IPaystackDisbursementService, PaystackDisbursementService>();
+                
+                // NOTE: Register your concrete Phase 2 CRC implementation here if not handled inside your core Infrastructure extensions
+                services.AddScoped<ICreditBureauService, Demlo.Infrastructure.Services.CrcCreditBureauService>();;
 
-                // ──► 1. REGISTER THE MATCHING JOB SERVICE IN THE DI CONTAINER
+                // ──► 1. ALL JOB CLASSES REGISTERED IN THE DI CONTAINER
                 services.AddScoped<LoanMatchingJob>();
+                services.AddScoped<CreditBureauScoringJob>();
+                services.AddScoped<LedgerBalancingJob>();
 
+                // Configure Hangfire Storage
                 services.AddHangfire(config =>
                 {
                     config.SetDataCompatibilityLevel(CompatibilityLevel.Version_180)
@@ -49,10 +60,12 @@ public class Program
             })
             .Build();
 
+        // ──► 2. SCHEDULE RECURRING BACKGROUND CRON DAEMONS
         using (var serviceScope = host.Services.CreateScope())
         {
             var recurringJobManager = serviceScope.ServiceProvider.GetRequiredService<IRecurringJobManager>();
 
+            // Nightly Delinquency Strike Audit (23:59)
             Console.WriteLine("[HANGFIRE] Scheduling Recurring Nightly Delinquency Audit Execution Rule...");
             recurringJobManager.AddOrUpdate<LoanDelinquencyJob>(
                 "nightly-loan-delinquency-audit",
@@ -60,20 +73,29 @@ public class Program
                 Cron.Daily(23, 59)
             );
 
-            // ──► 2. WIRE UP THE 5-MINUTE RECURRING MATCHING ENGINE DAEMON
+            // Marketplace Matching Engine (Every 5 Minutes)
             Console.WriteLine("[HANGFIRE] Scheduling Automated Capital Allocation Matching Engine Loop (Every 5 Minutes)...");
             recurringJobManager.AddOrUpdate<LoanMatchingJob>(
                 "automated-capital-allocation-matching",
                 job => job.RunMatchingCycleAsync(CancellationToken.None),
-                "*/5 * * * *" // Strict standard 5-minute cron descriptor expressions
+                "*/5 * * * *"
             );
 
+            // CRC Credit Bureau Underwriting Evaluator (Hourly)
             Console.WriteLine("[HANGFIRE] Scheduling Asynchronous CRC Bureau Scoring Risk Evaluation Engine (Hourly)...");
             recurringJobManager.AddOrUpdate<CreditBureauScoringJob>(
                 "automated-crc-bureau-underwriting",
                 job => job.ProcessPendingUnderwritingScoresAsync(CancellationToken.None),
                 Cron.Hourly()
-          );
+            );
+
+            // Double-Entry Ledger Balancing Audit & CSV Cacher (23:45)
+            Console.WriteLine("[HANGFIRE] Scheduling Nightly Double-Entry Ledger Balancing and Integrity Audit (23:45)...");
+            recurringJobManager.AddOrUpdate<LedgerBalancingJob>(
+                "nightly-ledger-balancing-audit",
+                job => job.RunNightlyBalancingAuditAsync(CancellationToken.None),
+                Cron.Daily(23, 45)
+            );
         }
 
         Console.WriteLine("Workers engine running smoothly. Press Ctrl+C to safely terminate processing pipelines.");

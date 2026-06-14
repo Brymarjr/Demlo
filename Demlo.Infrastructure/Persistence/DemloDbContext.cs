@@ -30,6 +30,7 @@ public class DemloDbContext : DbContext
     public DbSet<LedgerEntry> LedgerEntries => Set<LedgerEntry>();
     public DbSet<Demlo.Domain.Entities.Wallet> Wallets { get; set; } = null!;
     public DbSet<Demlo.Domain.Entities.Transaction> Transactions { get; set; } = null!;
+    public DbSet<LedgerReconciliationAudit> LedgerReconciliationAudits { get; set; } = null!;
 
     // Intercepts the persistence pipeline to enforce automated audit tracking metrics.
     // Overrides standard SaveChanges behavior to guarantee baseline data correctness.
