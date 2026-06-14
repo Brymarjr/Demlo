@@ -3,12 +3,12 @@ using Microsoft.EntityFrameworkCore;
 using Demlo.Infrastructure;
 using Demlo.Infrastructure.Persistence;
 using Demlo.Api.Filters;
+using Demlo.Api.Middleware; // ◄ ADD THIS INLINE TO RESOLVE THE MIDDLEWARE NAMESPACE
 
 var builder = WebApplication.CreateBuilder(args);
 
 // Register your custom API-layer cryptographic filter
 builder.Services.AddScoped<MonoWebhookVerificationFilter>();
-
 builder.Services.AddScoped<PaystackWebhookVerificationFilter>();
 
 // 1. Register Core MVC Controller Framework
@@ -51,6 +51,10 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
+
+// ──► PL-83: PLACE THE SECURITY SHIELD MIDDLEWARE RIGHT HERE
+// It intercepts all incoming requests before they can ever map to controllers or consume DB channels
+app.UseMiddleware<SecurityHardeningMiddleware>();
 
 // 6. Map Controller Endpoints into the Application Routing Tree
 app.MapControllers();
