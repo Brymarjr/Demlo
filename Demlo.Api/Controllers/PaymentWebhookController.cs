@@ -18,22 +18,25 @@ public class PaymentWebhookController : ControllerBase
     private readonly DemloDbContext _context;
     private readonly ILoanService _loanService;
     private readonly INotificationService _notificationService;
-    private readonly ILedgerLiquidationService _ledgerLiquidationService; // ◄ 1. Inject the liquidation engine
+    private readonly ILedgerLiquidationService _ledgerLiquidationService;
+    private readonly IFinancialLedgerService _ledgerService; // ◄ 1. INJECT THE FINANCIAL LEDGER AUDITOR
 
     public PaymentWebhookController(
         DemloDbContext context,
         ILoanService loanService,
         INotificationService notificationService,
-        ILedgerLiquidationService ledgerLiquidationService)
+        ILedgerLiquidationService ledgerLiquidationService,
+        IFinancialLedgerService ledgerService) // ◄ 2. MAP TO CONSTRUCTOR
     {
         _context = context;
         _loanService = loanService;
         _notificationService = notificationService;
         _ledgerLiquidationService = ledgerLiquidationService;
+        _ledgerService = ledgerService;
     }
 
     [HttpPost("collections")]
-    [ServiceFilter(typeof(MonoWebhookVerificationFilter))] // ◄ ADDS THE CRYPTOGRAPHIC GUARD RAIL
+    [ServiceFilter(typeof(MonoWebhookVerificationFilter))]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> HandleDirectDebitCallback([FromBody] MonoWebhookDto payload, CancellationToken cancellationToken)
@@ -54,14 +57,24 @@ public class PaymentWebhookController : ControllerBase
         {
             Console.WriteLine($"[PAYMENT SUCCESS] Repayment cleared for Loan {loan.Id}. Triggering dynamic ledger split.");
             
-            // 2. EXECUTING DEBIT RECOVERY LOGIC (Bible Section 9.3)
-            // Distribute the incoming Kobo completely across all fractional lender allocations
             bool distributionSuccess = await _ledgerLiquidationService.DistributeRepaymentAsync(loan.Id, payload.Data.Amount, cancellationToken);
 
             if (!distributionSuccess)
             {
                 return BadRequest(new { error = "Ledger execution failed due to an allocation imbalance." });
             }
+
+            // ──► 3. LOG REPAYMENT EVENT TO THE IMMUTABLE DOUBLE-ENTRY LEDGER
+            // Source is Guid.Empty because the funds originated externally from Mono's open banking rail
+            await _ledgerService.LogTransactionAsync(
+                reference: $"mono_rec_{loan.Id}_{DateTime.UtcNow.Ticks}",
+                transactionType: "REPAYMENT_LIQUIDATION",
+                sourceAccountId: Guid.Empty,
+                destinationAccountId: loan.BorrowerId, // Tracks influx directly onto the borrower asset loop profile
+                amountKobo: payload.Data.Amount,
+                narrative: $"Automated Mono collection settlement split for Loan Ref: {loan.Id}",
+                cancellationToken: cancellationToken
+            );
 
             await _loanService.UpdateLoanStatusAsync(loan.Id, LoanStatus.Active, cancellationToken);
             return Ok(new { status = "SUCCESS", processed = true });
@@ -119,7 +132,6 @@ public class PaymentWebhookController : ControllerBase
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> HandlePaystackPayoutCallback([FromBody] PaystackWebhookDto payload, CancellationToken cancellationToken)
     {
-        // 1. Extract our internal tracking loanId from Paystack's unique reference token ("disburse_{loanId}")
         string reference = payload.Data.Reference;
         if (string.IsNullOrEmpty(reference) || !reference.StartsWith("disburse_"))
         {
@@ -132,7 +144,6 @@ public class PaymentWebhookController : ControllerBase
             return BadRequest(new { error = "Invalid unique cryptographic identifier signature." });
         }
 
-        // 2. Fetch the target asset from the database
         var loan = await _context.Loans
             .FirstOrDefaultAsync(l => l.Id == loanId, cancellationToken);
 
@@ -151,8 +162,19 @@ public class PaymentWebhookController : ControllerBase
                 {
                     loan.TransitionTo(LoanStatus.Active);
                     loan.DisbursedAt = DateTime.UtcNow;
-                    // Enforce the system timeline by anchoring the due date based on the contract tenor days
                     loan.DueAt = DateTime.UtcNow.AddDays(loan.TenorDays);
+
+                    // ──► 4. LOG LOAN DISBURSEMENT EVENT TO THE IMMUTABLE DOUBLE-ENTRY LEDGER
+                    // Destination is Guid.Empty because the capital physically exited our system boundaries out to the NIBSS network
+                    await _ledgerService.LogTransactionAsync(
+                        reference: reference,
+                        transactionType: "LOAN_DISBURSEMENT",
+                        sourceAccountId: loan.BorrowerId,
+                        destinationAccountId: Guid.Empty,
+                        amountKobo: loan.PrincipalAmountKobo,
+                        narrative: $"Outbound capital disbursement clear via Paystack for Loan ID: {loan.Id}",
+                        cancellationToken: cancellationToken
+                    );
 
                     Console.WriteLine($"[PAYSTACK SETTLEMENT SUCCESS] Loan {loan.Id} is now ACTIVE. Repayment tracking initiated.");
                 }
@@ -162,17 +184,14 @@ public class PaymentWebhookController : ControllerBase
             {
                 Console.WriteLine($"[PAYSTACK SETTLEMENT FAILED] Payout bounced for Loan {loan.Id}. Initiating capital rollback sequence.");
 
-                // Step A: Roll the master loan asset back to AWAITING_MATCH so it can retry in the next 5-minute engine pass
                 loan.Status = LoanStatus.AwaitingMatch;
 
-                // Step B: Fetch all allocation assignments generated during Phase 3 for this specific loan
                 var failedAllocations = await _context.LoanAllocations
                     .Where(a => a.LoanId == loan.Id)
                     .ToListAsync(cancellationToken);
 
                 foreach (var allocation in failedAllocations)
                 {
-                    // Step C: Locate the respective lender profile and refund their NGN 5,000 block instantly
                     var lender = await _context.LenderProfiles
                         .FirstOrDefaultAsync(p => p.UserId == allocation.LenderId, cancellationToken);
 
@@ -182,7 +201,6 @@ public class PaymentWebhookController : ControllerBase
                     }
                 }
 
-                // Step D: Remove the stale allocation maps completely to keep our reporting ledgers clean
                 _context.LoanAllocations.RemoveRange(failedAllocations);
             }
 
