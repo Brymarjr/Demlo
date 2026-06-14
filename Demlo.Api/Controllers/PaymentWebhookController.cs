@@ -6,6 +6,7 @@ using Demlo.Domain.Enums;
 using Demlo.Domain.Entities;
 using Demlo.Infrastructure.Persistence;
 using Demlo.Api.Models.Webhooks;
+using Demlo.Api.Filters;
 
 namespace Demlo.Api.Controllers;
 
@@ -32,6 +33,7 @@ public class PaymentWebhookController : ControllerBase
     }
 
     [HttpPost("collections")]
+    [ServiceFilter(typeof(MonoWebhookVerificationFilter))] // ◄ ADDS THE CRYPTOGRAPHIC GUARD RAIL
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public async Task<IActionResult> HandleDirectDebitCallback([FromBody] MonoWebhookDto payload, CancellationToken cancellationToken)

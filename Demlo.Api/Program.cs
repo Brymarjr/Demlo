@@ -2,8 +2,12 @@ using Asp.Versioning;
 using Microsoft.EntityFrameworkCore;
 using Demlo.Infrastructure;
 using Demlo.Infrastructure.Persistence;
+using Demlo.Api.Filters;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Register your custom API-layer cryptographic filter
+builder.Services.AddScoped<MonoWebhookVerificationFilter>();
 
 // 1. Register Core MVC Controller Framework
 builder.Services.AddControllers();
