@@ -43,6 +43,7 @@ public class Program
                 services.AddScoped<LoanMatchingJob>();
                 services.AddScoped<CreditBureauScoringJob>();
                 services.AddScoped<LedgerBalancingJob>();
+                services.AddScoped<LenderRiskFundJob>();
 
                 // Configure Hangfire Storage
                 services.AddHangfire(config =>
@@ -96,6 +97,13 @@ public class Program
                 job => job.RunNightlyBalancingAuditAsync(CancellationToken.None),
                 Cron.Daily(23, 45)
             );
+
+            Console.WriteLine("[HANGFIRE] Scheduling Automated Daily Lender Risk Fund (LRF) Default Liquidation Insurance Engine (01:00)...");
+            recurringJobManager.AddOrUpdate<LenderRiskFundJob>(
+                "automated-lrf-default-liquidation",
+                job => job.LiquidateDefaultedClaimsAsync(CancellationToken.None),
+                Cron.Daily(1, 0)
+             );
         }
 
         Console.WriteLine("Workers engine running smoothly. Press Ctrl+C to safely terminate processing pipelines.");
