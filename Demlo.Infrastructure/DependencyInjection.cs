@@ -67,6 +67,9 @@ public static class DependencyInjection
         // Register the typed HttpClient pattern for Paystack core payout execution
         services.AddHttpClient<IPaystackDisbursementService, PaystackDisbursementService>();
 
+        // REGISTER THE CONCRETE DOUBLE-ENTRY ACCOUNTING LEDGER AUDITING ENGINE
+        services.AddScoped<IFinancialLedgerService, FinancialLedgerService>();
+
         return services;
     }
 }
