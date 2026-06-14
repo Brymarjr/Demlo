@@ -113,4 +113,88 @@ public class PaymentWebhookController : ControllerBase
 
         return BadRequest(new { error = "Unsupported payment provider webhook channel action event." });
     }
+
+    [HttpPost("paystack-settlements")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    public async Task<IActionResult> HandlePaystackPayoutCallback([FromBody] PaystackWebhookDto payload, CancellationToken cancellationToken)
+    {
+        // 1. Extract our internal tracking loanId from Paystack's unique reference token ("disburse_{loanId}")
+        string reference = payload.Data.Reference;
+        if (string.IsNullOrEmpty(reference) || !reference.StartsWith("disburse_"))
+        {
+            return BadRequest(new { error = "Malformed or missing external settlement reference format." });
+        }
+
+        string loanIdStr = reference.Replace("disburse_", "");
+        if (!Guid.TryParse(loanIdStr, out Guid loanId))
+        {
+            return BadRequest(new { error = "Invalid unique cryptographic identifier signature." });
+        }
+
+        // 2. Fetch the target asset from the database
+        var loan = await _context.Loans
+            .FirstOrDefaultAsync(l => l.Id == loanId, cancellationToken);
+
+        if (loan == null)
+        {
+            return Ok(new { message = "Payout callback received but no matching loan asset exists." });
+        }
+
+        using var dbTransaction = await _context.Database.BeginTransactionAsync(cancellationToken);
+        try
+        {
+            // --- SUCCESS FLOW: CASH RECEIVED BY BORROWER ---
+            if (payload.Event == "transfer.success")
+            {
+                if (loan.Status == LoanStatus.Disbursed)
+                {
+                    loan.TransitionTo(LoanStatus.Active);
+                    loan.DisbursedAt = DateTime.UtcNow;
+                    // Enforce the system timeline by anchoring the due date based on the contract tenor days
+                    loan.DueAt = DateTime.UtcNow.AddDays(loan.TenorDays);
+
+                    Console.WriteLine($"[PAYSTACK SETTLEMENT SUCCESS] Loan {loan.Id} is now ACTIVE. Repayment tracking initiated.");
+                }
+            }
+            // --- FAILURE/REVERSAL FLOW: CASH REJECTED BY NIBSS NETWORK ---
+            else if (payload.Event == "transfer.failed" || payload.Event == "transfer.reversed")
+            {
+                Console.WriteLine($"[PAYSTACK SETTLEMENT FAILED] Payout bounced for Loan {loan.Id}. Initiating capital rollback sequence.");
+
+                // Step A: Roll the master loan asset back to AWAITING_MATCH so it can retry in the next 5-minute engine pass
+                loan.Status = LoanStatus.AwaitingMatch;
+
+                // Step B: Fetch all allocation assignments generated during Phase 3 for this specific loan
+                var failedAllocations = await _context.LoanAllocations
+                    .Where(a => a.LoanId == loan.Id)
+                    .ToListAsync(cancellationToken);
+
+                foreach (var allocation in failedAllocations)
+                {
+                    // Step C: Locate the respective lender profile and refund their NGN 5,000 block instantly
+                    var lender = await _context.LenderProfiles
+                        .FirstOrDefaultAsync(p => p.UserId == allocation.LenderId, cancellationToken);
+
+                    if (lender != null)
+                    {
+                        lender.AvailableBalanceKobo += allocation.AllocatedAmountKobo;
+                    }
+                }
+
+                // Step D: Remove the stale allocation maps completely to keep our reporting ledgers clean
+                _context.LoanAllocations.RemoveRange(failedAllocations);
+            }
+
+            await _context.SaveChangesAsync(cancellationToken);
+            await dbTransaction.CommitAsync(cancellationToken);
+            return Ok(new { status = "PROCESSED" });
+        }
+        catch (Exception ex)
+        {
+            await dbTransaction.RollbackAsync(cancellationToken);
+            Console.WriteLine($"[SETTLEMENT GATEWAY CRITICAL ERROR] Failed resolving Paystack payload for Loan {loan.Id}: {ex.Message}");
+            return StatusCode(StatusCodes.Status500InternalServerError, new { error = "Internal reconciliation processing failure." });
+        }
+    }
 }
