@@ -8,6 +8,7 @@ using Demlo.Application.Common.Interfaces;
 using Demlo.Infrastructure.Persistence;
 using Demlo.Infrastructure.Services;
 using Demlo.Workers.Jobs;
+using Demlo.Workers.Services;
 
 namespace Demlo.Workers;
 
@@ -31,6 +32,7 @@ public class Program
                 services.AddScoped<ILoanService, LoanService>();
                 services.AddScoped<IGlobalPolicyEngine, GlobalPolicyEngine>();
                 services.AddScoped<INotificationService, NotificationService>();
+                services.AddHostedService<GracefulShutdownHostedService>();
                 
                 //  Financial & Third-Party Integrations
                 services.AddScoped<IFinancialLedgerService, FinancialLedgerService>();
