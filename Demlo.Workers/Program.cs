@@ -23,7 +23,8 @@ public class Program
         var host = Host.CreateDefaultBuilder(args)
             .ConfigureServices((hostContext, services) =>
             {
-                string connectionString = "Host=localhost;Database=Demlo_db;Username=postgres;Password=postgres";
+                string connectionString = hostContext.Configuration["ConnectionStrings:PostgresConnection"] 
+                    ?? "Host=localhost;Database=demlo_db;Username=postgres;Password=brymarjr";
 
                 services.AddDbContext<DemloDbContext>(options =>
                     options.UseNpgsql(connectionString, b => b.MigrationsAssembly("Demlo.Infrastructure")));

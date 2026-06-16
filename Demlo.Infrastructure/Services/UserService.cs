@@ -71,6 +71,9 @@ public class UserService : IUserService
                 var ninHash = _securityService.HashIdentity(request.Nin);
 
                 // 4. Construct the core user account matrix record
+                var currentEnv = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
+                bool isDevelopment = string.Equals(currentEnv, "Development", StringComparison.OrdinalIgnoreCase);
+
                 var user = new User
                 {
                     Email = request.Email.ToLowerInvariant(),
@@ -78,7 +81,8 @@ public class UserService : IUserService
                     PasswordHash = passwordHash,
                     BvnHash = bvnHash,
                     NinHash = ninHash,
-                    Role = mappedRole
+                    Role = mappedRole,
+                    KycStatus = "PENDING"
                 };
 
                 _context.Users.Add(user);
@@ -150,8 +154,14 @@ public class UserService : IUserService
         // 1. Fetch the active OTP sequence currently retained inside our Redis cache store
         var cachedOtp = await _cache.GetStringAsync(cacheKey, cancellationToken);
 
-        // ◄ CHANGED: request.OtpCode modified to request.Otp to match your DTO model
-        if (string.IsNullOrEmpty(cachedOtp) || cachedOtp != request.Otp)
+        // ──► FIXED: Read the system environment variable directly (No dependencies required)
+        var currentEnv = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
+        bool isDevelopment = string.Equals(currentEnv, "Development", StringComparison.OrdinalIgnoreCase);
+
+        // DEFENSIVE GUARD: Bypass code is strictly locked to local Development instances
+        bool isTestBypass = isDevelopment && request.Otp == "123456";
+
+        if (!isTestBypass && (string.IsNullOrEmpty(cachedOtp) || cachedOtp != request.Otp))
         {
             throw new ArgumentException("The submitted verification token is invalid or has expired.");
         }
@@ -163,9 +173,16 @@ public class UserService : IUserService
             throw new InvalidOperationException("No user account matching the validated phone metadata could be discovered.");
         }
 
-        // 3. Purge the consumed OTP sequence from our Redis cluster to prevent token replay leaks
-        await _cache.RemoveAsync(cacheKey, cancellationToken);
+        // UPDATE AND SAVE THE VERIFIED STATE CHANGE
+        user.KycStatus = "VERIFIED";
+        _context.Users.Update(user);
+        await _context.SaveChangesAsync(cancellationToken);
 
+        // 3. Purge the consumed OTP sequence from our Redis cluster to prevent token replay leaks
+        if (!isTestBypass)
+        {    
+             await _cache.RemoveAsync(cacheKey, cancellationToken);
+        }
         // 4. AUTOMATED KYC KICKOFF LOOP (Section 6.3): Dispatch async requests directly to Smile ID
         Console.WriteLine($"[KYC TRIGGER] Phone verification successful for User {user.Id}. Initializing asynchronous compliance validation paths.");
 

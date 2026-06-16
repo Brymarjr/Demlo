@@ -1,4 +1,5 @@
 ﻿namespace Demlo.Application.DTOs;
+using System.Text.Json.Serialization;
 
 // Defines the strict data contract for incoming registration payloads.
 // Enforces Section 5.2 and Section 6.1 compliance parameters.
@@ -6,6 +7,7 @@ public record RegisterUserDto
 {
     public string Email { get; init; } = string.Empty;
 
+    [JsonPropertyName("phone")]
     public string PhoneNumber { get; init; } = string.Empty;
 
     public string Password { get; init; } = string.Empty;

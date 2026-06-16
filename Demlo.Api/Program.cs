@@ -3,7 +3,8 @@ using Microsoft.EntityFrameworkCore;
 using Demlo.Infrastructure;
 using Demlo.Infrastructure.Persistence;
 using Demlo.Api.Filters;
-using Demlo.Api.Middleware; // ◄ ADD THIS INLINE TO RESOLVE THE MIDDLEWARE NAMESPACE
+using Demlo.Api.Middleware; 
+using StackExchange.Redis; // ◄ 1. ADD THIS NAMESPACE FOR THE MULTIPLEXER SIGNATURES
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -29,6 +30,14 @@ builder.Services.AddApiVersioning(options =>
 {
     options.GroupNameFormat = "'v'VVV";
     options.SubstituteApiVersionInUrl = true;
+});
+
+// ──► 2. PL-83 CONNECTION MULTIPLEXER REGISTRATION HANDLER
+// Connects natively to Memurai/Redis instance using your verified appsettings setup string
+builder.Services.AddSingleton<IConnectionMultiplexer>(sp =>
+{
+    var redisUrl = builder.Configuration.GetSection("RedisSettings:Url").Value ?? "localhost:6379";
+    return ConnectionMultiplexer.Connect(redisUrl);
 });
 
 // 4. Core Database Engine Registration
