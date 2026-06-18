@@ -29,4 +29,10 @@ public class BorrowerProfile : BaseEntity
     // The unique identifier referencing the borrower's primary linked bank account inside Mono.
     // Used to look up statement histories and trigger recurring direct debit pulls.
     public string BankAccountId { get; set; } = string.Empty;
+
+    // ──► NEW TIER-1 ONBOARDING FIELDS 
+    public string OnboardingAddress { get; set; } = string.Empty;
+    public string EmploymentStatus { get; set; } = string.Empty;
+    public string BankName { get; set; } = string.Empty;
+    public string BankAccountNumber { get; set; } = string.Empty;
 }

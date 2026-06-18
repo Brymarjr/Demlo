@@ -1,0 +1,10 @@
+namespace Demlo.Application.DTOs;
+
+public class UpdateBorrowerProfileDto
+{
+    public string OnboardingAddress { get; set; } = string.Empty;
+    public long MonthlyIncomeKobo { get; set; }
+    public string EmploymentStatus { get; set; } = string.Empty;
+    public string BankName { get; set; } = string.Empty;
+    public string BankAccountNumber { get; set; } = string.Empty;
+}

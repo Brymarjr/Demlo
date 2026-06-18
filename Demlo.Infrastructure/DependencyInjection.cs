@@ -70,6 +70,9 @@ public static class DependencyInjection
         // REGISTER THE CONCRETE DOUBLE-ENTRY ACCOUNTING LEDGER AUDITING ENGINE
         services.AddScoped<IFinancialLedgerService, FinancialLedgerService>();
 
+        // Register the Profile Service for Tier-1 Onboarding
+        services.AddScoped<IProfileService, ProfileService>();
+
         return services;
     }
 }
