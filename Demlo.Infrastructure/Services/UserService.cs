@@ -224,7 +224,10 @@ public class UserService : IUserService
         // 1. Extract user claims principal out of the expired incoming token safely
         var principal = _tokenService.GetPrincipalFromExpiredToken(request.AccessToken);
 
-        var userIdClaim = principal.FindFirst(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Sub)?.Value;
+        // Search across both standard token layout namespaces to capture the user ID string
+        var userIdClaim = principal.FindFirst(System.IdentityModel.Tokens.Jwt.JwtRegisteredClaimNames.Sub)?.Value
+                          ?? principal.FindFirst(System.Security.Claims.ClaimTypes.NameIdentifier)?.Value;
+                          
         if (string.IsNullOrEmpty(userIdClaim) || !Guid.TryParse(userIdClaim, out var userId))
         {
             throw new Microsoft.IdentityModel.Tokens.SecurityTokenException("Invalid token payload claims principal formatting.");
