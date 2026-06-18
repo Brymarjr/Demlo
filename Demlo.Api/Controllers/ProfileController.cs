@@ -51,4 +51,34 @@ public class ProfileController : ControllerBase
             return StatusCode(StatusCodes.Status500InternalServerError, new { error = "An unexpected fault occurred while saving profile metrics." });
         }
     }
+
+    [HttpPut("lender")]
+    [ProducesResponseType(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status400BadRequest)]
+    [ProducesResponseType(StatusCodes.Status401Unauthorized)]
+    public async Task<IActionResult> UpdateLenderProfile([FromBody] UpdateLenderProfileDto request, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
+            
+            if (string.IsNullOrEmpty(userIdClaim) || !Guid.TryParse(userIdClaim, out var userId))
+            {
+                return Unauthorized(new { error = "Invalid or missing token identity payload." });
+            }
+
+            await _profileService.UpdateLenderProfileAsync(userId, request, cancellationToken);
+
+            return Ok(new { message = "Tier-1 lender profile synchronized successfully." });
+        }
+        catch (InvalidOperationException ex)
+        {
+            return BadRequest(new { error = ex.Message });
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[CRITICAL DEFAULT] Profile Synchronization Failure: {ex.Message}");
+            return StatusCode(StatusCodes.Status500InternalServerError, new { error = "An unexpected fault occurred while saving profile metrics." });
+        }
+    }
 }

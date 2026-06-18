@@ -38,4 +38,27 @@ public class ProfileService : IProfileService
 
         return true;
     }
+
+    public async Task<bool> UpdateLenderProfileAsync(Guid userId, UpdateLenderProfileDto request, CancellationToken cancellationToken = default)
+    {
+        // 1. Fetch the existing lender profile
+        var profile = await _context.LenderProfiles
+            .FirstOrDefaultAsync(p => p.UserId == userId, cancellationToken);
+
+        if (profile == null)
+        {
+            throw new InvalidOperationException("Lender profile record could not be located for the authenticated user.");
+        }
+
+        // 2. Map the Tier-1 payload parameters
+        profile.OnboardingAddress = request.OnboardingAddress;
+        profile.BankName = request.BankName;
+        profile.BankAccountNumber = request.BankAccountNumber;
+
+        // 3. Commit state changes
+        _context.LenderProfiles.Update(profile);
+        await _context.SaveChangesAsync(cancellationToken);
+
+        return true;
+    }
 }

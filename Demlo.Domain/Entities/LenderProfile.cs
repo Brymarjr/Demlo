@@ -25,4 +25,9 @@ public class LenderProfile : BaseEntity
     // Cumulative historical sum of all interest distributions earned from matched fractional loans.
     // Stored strictly in Kobo.
     public long TotalEarnedKobo { get; set; }
+
+    // TIER-1 ONBOARDING FIELDS FOR LENDERS
+    public string OnboardingAddress { get; set; } = string.Empty;
+    public string BankName { get; set; } = string.Empty;
+    public string BankAccountNumber { get; set; } = string.Empty;
 }
