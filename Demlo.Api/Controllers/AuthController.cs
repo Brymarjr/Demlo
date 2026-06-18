@@ -152,7 +152,11 @@ public class AuthController : ControllerBase
 
             var tokenHandler = new JwtSecurityTokenHandler();
             var jwtToken = tokenHandler.ReadJwtToken(accessToken);
-            var jti = jwtToken.Claims.FirstOrDefault(c => c.Type == "jti")?.Value ?? Guid.NewGuid().ToString();
+            
+            // ──► FIX: Search using the standardized claim type property string
+            var jti = jwtToken.Claims.FirstOrDefault(c => c.Type == JwtRegisteredClaimNames.Jti)?.Value 
+                      ?? jwtToken.Claims.FirstOrDefault(c => c.Type == "jti")?.Value 
+                      ?? Guid.NewGuid().ToString();
 
             await _tokenService.SaveRefreshTokenAsync(user.Id, refreshToken, jti, cancellationToken);
 
