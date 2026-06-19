@@ -26,6 +26,9 @@ public class LenderProfile : BaseEntity
     // Stored strictly in Kobo.
     public long TotalEarnedKobo { get; set; }
 
+    // The unique identifier referencing the lender's linked bank account inside Mono.
+    public string BankAccountId { get; set; } = string.Empty;
+
     // TIER-1 ONBOARDING FIELDS FOR LENDERS
     public string OnboardingAddress { get; set; } = string.Empty;
     public string BankName { get; set; } = string.Empty;
