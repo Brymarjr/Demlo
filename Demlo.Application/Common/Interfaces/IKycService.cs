@@ -12,5 +12,5 @@ public interface IKycService
     // Submits a background verification request for NIN validation.
     Task<bool> VerifyNinAsync(User user, string rawNin, CancellationToken cancellationToken = default);
 
-    Task<bool> SubmitKycAsync(Guid userId, CancellationToken cancellationToken = default);
+    Task<bool> SubmitKycAsync(User user, string idType, string idNumber, CancellationToken cancellationToken = default);
 }

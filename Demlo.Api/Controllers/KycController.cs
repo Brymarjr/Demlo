@@ -51,12 +51,13 @@ public class KycController : ControllerBase
         });
     }
 
-    // ──► ACTIVE ENDPOINT: Trigger Manual Retry
+    // ──► ACTIVE ENDPOINT: Trigger Manual Retry (PRODUCTION READY)
     [HttpPost("retry")]
     [Authorize]
     [ProducesResponseType(StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
-    public async Task<IActionResult> RetryKyc(CancellationToken cancellationToken)
+    [ProducesResponseType(StatusCodes.Status502BadGateway)]
+    public async Task<IActionResult> RetryKyc([FromBody] RetryKycDto request, CancellationToken cancellationToken)
     {
         var userIdClaim = User.FindFirst(ClaimTypes.NameIdentifier)?.Value;
         if (!Guid.TryParse(userIdClaim, out var userId)) return Unauthorized();
@@ -64,15 +65,25 @@ public class KycController : ControllerBase
         var user = await _context.Users.FindAsync(new object[] { userId }, cancellationToken);
         if (user == null) return NotFound();
 
-        // ◄ FIXED: Checking against the exact string state
         if (user.KycStatus == "Verified") 
         {
             return BadRequest(new { error = "User is already verified. Retry unnecessary." });
         }
 
-        var success = await _kycService.SubmitKycAsync(userId, cancellationToken);
+        // 1. Fire the real request to the external gateway
+        var success = await _kycService.SubmitKycAsync(user, request.IdType, request.IdNumber, cancellationToken);
 
-        return Ok(new { message = "KYC verification retry initiated and pushed to background processor." });
+        if (!success)
+        {
+            return StatusCode(StatusCodes.Status502BadGateway, new { error = "Failed to communicate with the Smile ID gateway. Please try again." });
+        }
+
+        // 2. Safely lock the user's status back into a pending verification state
+        user.KycStatus = "Pending";
+        _context.Users.Update(user);
+        await _context.SaveChangesAsync(cancellationToken);
+
+        return Ok(new { message = "KYC verification retry accepted and pushed to background processor." });
     }
 
     // ──► PASSIVE ENDPOINT: Smile ID Webhook

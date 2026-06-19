@@ -21,14 +21,18 @@ public class SmileIdKycService : IKycService
         _configuration = configuration;
     }
 
-    // ──► FIXED: The missing contract for manual retries
-    public async Task<bool> SubmitKycAsync(Guid userId, CancellationToken cancellationToken = default)
+    public async Task<bool> SubmitKycAsync(User user, string idType, string idNumber, CancellationToken cancellationToken = default)
     {
-        // In a full production flow, this would look up the user's previously 
-        // submitted BVN/NIN from the database and re-fire SendSmileIdIdentityVerificationAsync.
-        // For now, it successfully acknowledges the retry command from the controller.
-        Console.WriteLine($"[KYC ENGINE] Manual Smile ID verification retry pushed to background queue for User: {userId}");
-        return await Task.FromResult(true);
+        var type = idType.ToUpper();
+        if (type != "BVN" && type != "NIN")
+        {
+            throw new ArgumentException("Invalid ID Type. Must be BVN or NIN.");
+        }
+
+        Console.WriteLine($"[KYC ENGINE] Manual Smile ID verification retry initiated for User: {user.Id} via {type}");
+        
+        // This calls your existing, fully-built private method to physically ping Smile ID
+        return await SendSmileIdIdentityVerificationAsync(user, idNumber, type, cancellationToken);
     }
 
     public async Task<bool> VerifyBvnAsync(User user, string rawBvn, CancellationToken cancellationToken = default)
