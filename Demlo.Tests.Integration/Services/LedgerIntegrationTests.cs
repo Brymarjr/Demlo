@@ -5,6 +5,7 @@ using Demlo.Domain.Enums;
 using Demlo.Infrastructure.Persistence;
 using Demlo.Infrastructure.Services;
 using Xunit;
+using Microsoft.Extensions.Configuration;
 
 namespace Demlo.Tests.Integration.Services;
 
@@ -15,7 +16,7 @@ public class LedgerIntegrationTests
     {
         var options = new DbContextOptionsBuilder<DemloDbContext>()
             .UseInMemoryDatabase(databaseName: $"Demlo_Test_{Guid.NewGuid()}")
-            // ──► ADD THIS line to tell EF Core to bypass relational transaction errors during unit tests
+            // Tell EF Core to bypass relational transaction errors during unit tests
             .ConfigureWarnings(x => x.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.InMemoryEventId.TransactionIgnoredWarning))
             .Options;
 
@@ -26,8 +27,17 @@ public class LedgerIntegrationTests
     public async Task TransferFundsAsync_Should_Enforce_Strict_Liquidity_Guardrails_And_Prevent_Overdrafts()
     {
         // 1. ARRANGE: Set up isolated contexts and generate tracking data models
-        var context = GetInMemoryDbContext();
-        var walletService = new WalletService(context);
+        var context = GetInMemoryDbContext(); 
+        
+        // Build a dummy configuration in memory to satisfy the BankCodes lookup
+        var testSettings = new Dictionary<string, string?> { { "BankCodes:gtb", "058" } };
+        var configuration = new ConfigurationBuilder().AddInMemoryCollection(testSettings).Build();
+
+        // Instantiate a manual dummy Paystack service
+        var dummyPaystackService = new DummyPaystackService();
+
+        // ──► FIXED: Changed _context to context
+        var walletService = new WalletService(context, dummyPaystackService, configuration);
 
         var senderId = Guid.NewGuid();
         var recipientId = Guid.NewGuid();
@@ -74,11 +84,8 @@ public class LedgerIntegrationTests
         var context = GetInMemoryDbContext();
         var loanService = new LoanService(context, new NotificationService());
         var mockBureauService = new MockCreditBureauService(750);
-
-        // ──► ADD THIS: Inline mock to simulate the database returning a dynamic cutoff value of 550
         var mockPolicyEngine = new MockGlobalPolicyEngine("550");
 
-        // Pass the 4th required argument straight into the constructor to clear error CS7036
         var underwritingEngine = new UnderwritingEngine(context, loanService, mockBureauService, mockPolicyEngine);
 
         var borrowerId = Guid.NewGuid();
@@ -127,4 +134,13 @@ public class LedgerIntegrationTests
             return Task.FromResult(_scoreToReturn);
         }
     }
-}
+
+    // ──► FIXED: Moved inside the LedgerIntegrationTests class so the compiler can access it
+    private class DummyPaystackService : IPaystackDisbursementService
+    {
+        public Task<bool> InitiateLoanDisbursementAsync(Guid loanId, CancellationToken cancellationToken) => Task.FromResult(true);
+        public Task<string> InitializeDepositAsync(string email, long amountKobo, string reference, CancellationToken cancellationToken = default) => Task.FromResult("https://checkout.paystack.com/test");
+        public Task<bool> InitiateWalletWithdrawalAsync(long amountKobo, string bankCode, string accountNumber, string reference, CancellationToken cancellationToken = default) => Task.FromResult(true);
+    }
+
+} 

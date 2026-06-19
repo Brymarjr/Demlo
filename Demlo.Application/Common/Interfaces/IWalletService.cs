@@ -19,4 +19,10 @@ public interface IWalletService
     // Executes a secure internal peer-to-peer wallet-to-wallet transfer between two users.
     // Deducts from the sender and adds to the recipient under an atomic database transaction.
     Task<bool> TransferFundsAsync(Guid senderUserId, Guid recipientUserId, long amountKobo, string description, CancellationToken cancellationToken = default);
+
+    // ──► NEW: Generates a funding link for the frontend
+    Task<string> RequestDepositLinkAsync(Guid userId, long amountKobo, CancellationToken cancellationToken = default);
+
+    // ──► NEW: Orchestrates a wallet debit and external bank payout
+    Task<bool> RequestWithdrawalAsync(Guid userId, long amountKobo, CancellationToken cancellationToken = default);
 }

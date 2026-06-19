@@ -119,5 +119,19 @@ public class LoanMatchingJobTests
         {
             return Task.FromResult(true);
         }
+
+        // ──► NEW: Satisfy the compiler for the Deposit interface contract
+        public Task<string> InitializeDepositAsync(string email, long amountKobo, string reference, CancellationToken cancellationToken = default)
+        {
+            // Return a dummy checkout URL since this is just a test mock
+            return Task.FromResult("https://checkout.paystack.com/mock-test-url");
+        }
+
+        // ──► NEW: Satisfy the compiler for the Withdrawal interface contract
+        public Task<bool> InitiateWalletWithdrawalAsync(long amountKobo, string bankCode, string accountNumber, string reference, CancellationToken cancellationToken = default)
+        {
+            // Always pretend the withdrawal succeeded during integration tests
+            return Task.FromResult(true);
+        }
     }
 }

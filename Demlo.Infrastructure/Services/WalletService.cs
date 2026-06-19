@@ -1,6 +1,8 @@
 ﻿using Microsoft.EntityFrameworkCore;
 using Demlo.Application.Common.Interfaces;
 using Demlo.Infrastructure.Persistence;
+using Demlo.Domain.Enums;
+using Microsoft.Extensions.Configuration;
 
 namespace Demlo.Infrastructure.Services;
 
@@ -9,26 +11,23 @@ namespace Demlo.Infrastructure.Services;
 public class WalletService : IWalletService
 {
     private readonly DemloDbContext _context;
+    private readonly IPaystackDisbursementService _paystackService; // ◄ NEW: Injected external gateway
+    private readonly IConfiguration _configuration;
 
-    public WalletService(DemloDbContext context)
+    public WalletService(DemloDbContext context, IPaystackDisbursementService paystackService, IConfiguration configuration)
     {
         _context = context;
+        _paystackService = paystackService;
+        _configuration = configuration;
     }
 
     public async Task<bool> ProvisionUserWalletAsync(Guid userId, CancellationToken cancellationToken = default)
     {
         try
         {
-            // 1. Verify if an internal account entry structure already exists for this identity
             var existingWallet = await _context.Wallets.AnyAsync(w => w.UserId == userId, cancellationToken);
-            if (existingWallet)
-            {
-                Console.WriteLine($"[LEDGER INFO] Wallet structure is already provisioned for individual user profile context: {userId}");
-                return true;
-            }
+            if (existingWallet) return true;
 
-            // 2. Initialize a secure domain container mapping record inside our relational mapping tree
-            // Assuming your domain model context uses standard 'Wallet' mapping variables linked to Core Users
             var newWallet = new Domain.Entities.Wallet
             {
                 Id = Guid.NewGuid(),
@@ -40,7 +39,7 @@ public class WalletService : IWalletService
             await _context.Wallets.AddAsync(newWallet, cancellationToken);
             await _context.SaveChangesAsync(cancellationToken);
 
-            Console.WriteLine($"[LEDGER SUCCESS] Pristine transaction-safe double-entry ledger wallet generated for User: {userId}");
+            Console.WriteLine($"[LEDGER SUCCESS] Pristine double-entry ledger wallet generated for User: {userId}");
             return true;
         }
         catch (Exception ex)
@@ -52,26 +51,14 @@ public class WalletService : IWalletService
 
     public async Task<long> GetWalletBalanceAsync(Guid userId, CancellationToken cancellationToken = default)
     {
-        // 1. Find the target wallet reference token id
-        var wallet = await _context.Wallets
-            .AsNoTracking()
-            .FirstOrDefaultAsync(w => w.UserId == userId, cancellationToken);
+        var wallet = await _context.Wallets.AsNoTracking().FirstOrDefaultAsync(w => w.UserId == userId, cancellationToken);
+        if (wallet == null) return 0;
 
-        if (wallet == null)
-        {
-            return 0; // Fallback to zero state if a lookup execution occurs prematurely
-        }
-
-        // 2. Compute the current user clear cash balance dynamically out of the transaction ledger.
-        // Summing Credits minus Debits guarantees total tracking balance accountability (Section 9.1)
-        // If your database schema stores explicit TransactionLedger rows, we calculate them directly:
-        var totalCredits = await _context.Transactions
-            .AsNoTracking()
+        var totalCredits = await _context.Transactions.AsNoTracking()
             .Where(t => t.WalletId == wallet.Id && t.Type == "CREDIT")
             .SumAsync(t => t.AmountKobo, cancellationToken);
 
-        var totalDebits = await _context.Transactions
-            .AsNoTracking()
+        var totalDebits = await _context.Transactions.AsNoTracking()
             .Where(t => t.WalletId == wallet.Id && t.Type == "DEBIT")
             .SumAsync(t => t.AmountKobo, cancellationToken);
 
@@ -102,66 +89,147 @@ public class WalletService : IWalletService
     public async Task<bool> TransferFundsAsync(Guid senderUserId, Guid recipientUserId, long amountKobo, string description, CancellationToken cancellationToken = default)
     {
         if (amountKobo <= 0) throw new ArgumentException("Transfer amount must be greater than zero kobo.");
-        if (senderUserId == recipientUserId) throw new ArgumentException("Sender and recipient configurations cannot be identical.");
+        if (senderUserId == recipientUserId) throw new ArgumentException("Sender and recipient cannot be identical.");
 
-        // Initialize an atomic database execution transaction strategy context
         using var dbTransaction = await _context.Database.BeginTransactionAsync(cancellationToken);
 
         try
         {
-            // 1. Fetch and confirm both target wallet maps exist
             var senderWallet = await _context.Wallets.FirstOrDefaultAsync(w => w.UserId == senderUserId, cancellationToken);
             var recipientWallet = await _context.Wallets.FirstOrDefaultAsync(w => w.UserId == recipientUserId, cancellationToken);
 
-            if (senderWallet == null || recipientWallet == null)
-            {
-                throw new InvalidOperationException("One or both associated financial routing wallets do not exist.");
-            }
+            if (senderWallet == null || recipientWallet == null) throw new InvalidOperationException("Associated wallets do not exist.");
 
-            // 2. Enforce liquidity rules: Verify the sender actually has enough clear balance
             var senderBalance = await GetWalletBalanceAsync(senderUserId, cancellationToken);
-            if (senderBalance < amountKobo)
-            {
-                throw new InvalidOperationException("Transfer execution rejected due to insufficient available ledger liquidity balance.");
-            }
+            if (senderBalance < amountKobo) throw new InvalidOperationException("Transfer rejected due to insufficient available balance.");
 
-            // 3. Post the balancing double-entry ledger records
-            // Debit the sender's channel (Money moves OUT)
             var debitRecord = new Domain.Entities.Transaction
             {
-                Id = Guid.NewGuid(),
-                WalletId = senderWallet.Id,
-                AmountKobo = amountKobo,
-                Type = "DEBIT",
-                Description = $"P2P Transfer to User {recipientUserId}: {description}",
-                Timestamp = DateTime.UtcNow
+                Id = Guid.NewGuid(), WalletId = senderWallet.Id, AmountKobo = amountKobo, Type = "DEBIT",
+                Description = $"P2P Transfer to User {recipientUserId}: {description}", Timestamp = DateTime.UtcNow
             };
 
-            // Credit the recipient's channel (Money moves IN)
             var creditRecord = new Domain.Entities.Transaction
             {
-                Id = Guid.NewGuid(),
-                WalletId = recipientWallet.Id,
-                AmountKobo = amountKobo,
-                Type = "CREDIT",
-                Description = $"P2P Transfer from User {senderUserId}: {description}",
-                Timestamp = DateTime.UtcNow
+                Id = Guid.NewGuid(), WalletId = recipientWallet.Id, AmountKobo = amountKobo, Type = "CREDIT",
+                Description = $"P2P Transfer from User {senderUserId}: {description}", Timestamp = DateTime.UtcNow
             };
 
             await _context.Transactions.AddRangeAsync(new[] { debitRecord, creditRecord }, cancellationToken);
             await _context.SaveChangesAsync(cancellationToken);
-
-            // Commit the transaction to disk atomically
             await dbTransaction.CommitAsync(cancellationToken);
-            Console.WriteLine($"[LEDGER SUCCESS] Atomic P2P Transfer finalized cleanly. Amount: {amountKobo} kobo. Sender: {senderUserId} -> Recipient: {recipientUserId}");
             return true;
         }
         catch (Exception ex)
         {
-            // Roll back all changes to their pristine state if any part of the execution breaks
             await dbTransaction.RollbackAsync(cancellationToken);
-            Console.WriteLine($"[CRITICAL LEDGER ABORT] Internal transfer pipeline crashed. Full rollback executed. Reason: {ex.Message}");
+            Console.WriteLine($"[CRITICAL LEDGER ABORT] Internal transfer crashed: {ex.Message}");
             return false;
         }
+    }
+
+    // ──► NEW: Generate Paystack Deposit Checkout Link
+    public async Task<string> RequestDepositLinkAsync(Guid userId, long amountKobo, CancellationToken cancellationToken = default)
+    {
+        var user = await _context.Users.FindAsync(new object[] { userId }, cancellationToken);
+        if (user == null) throw new InvalidOperationException("User identity not found.");
+
+        string email = string.IsNullOrWhiteSpace(user.Email) ? "funding@demlo.com" : user.Email;
+        string reference = $"dep_{Guid.NewGuid():N}"; // Unique transaction reference
+
+        // Hand off to the Paystack service to generate the secure checkout URL
+        return await _paystackService.InitializeDepositAsync(email, amountKobo, reference, cancellationToken);
+    }
+
+    // ──► NEW: Execute External Wallet Cashout via Paystack Transfer
+    public async Task<bool> RequestWithdrawalAsync(Guid userId, long amountKobo, CancellationToken cancellationToken = default)
+    {
+        // 1. Setup atomic transaction context
+        using var dbTransaction = await _context.Database.BeginTransactionAsync(cancellationToken);
+
+        try
+        {
+            var user = await _context.Users.FindAsync(new object[] { userId }, cancellationToken);
+            var wallet = await _context.Wallets.FirstOrDefaultAsync(w => w.UserId == userId, cancellationToken);
+
+            if (user == null || wallet == null) throw new InvalidOperationException("Financial structures not found.");
+
+            // 2. Validate liquidity
+            var currentBalance = await GetWalletBalanceAsync(userId, cancellationToken);
+            if (currentBalance < amountKobo) throw new InvalidOperationException("Insufficient clear balance for withdrawal.");
+
+            // 3. Extract verified banking details based on the user's role architecture
+            string accountNumber = string.Empty;
+            string bankName = string.Empty;
+
+            if (user.Role == UserRole.Borrower)
+            {
+                var profile = await _context.BorrowerProfiles.FirstOrDefaultAsync(p => p.UserId == userId, cancellationToken);
+                if (profile == null || string.IsNullOrEmpty(profile.BankAccountNumber)) throw new InvalidOperationException("Borrower has no linked bank account.");
+                accountNumber = profile.BankAccountNumber;
+                bankName = profile.BankName;
+            }
+            else if (user.Role == UserRole.Lender)
+            {
+                var profile = await _context.LenderProfiles.FirstOrDefaultAsync(p => p.UserId == userId, cancellationToken);
+                if (profile == null || string.IsNullOrEmpty(profile.BankAccountNumber)) throw new InvalidOperationException("Lender has no linked bank account.");
+                accountNumber = profile.BankAccountNumber;
+                bankName = profile.BankName;
+            }
+
+            // 4. Resolve the CBN 3-digit bank code required by NIBSS/Paystack
+            string bankCode = ResolveCbnBankCode(bankName);
+
+            // 5. Instantly debit the user's internal Demlo wallet (to prevent double-spending during API transit)
+            string withdrawalRef = $"wth_{Guid.NewGuid():N}";
+            var debitRecord = new Domain.Entities.Transaction
+            {
+                Id = Guid.NewGuid(),
+                WalletId = wallet.Id,
+                AmountKobo = amountKobo,
+                Type = "DEBIT",
+                Description = $"External Bank Withdrawal to {bankName}",
+                Timestamp = DateTime.UtcNow
+            };
+
+            await _context.Transactions.AddAsync(debitRecord, cancellationToken);
+            await _context.SaveChangesAsync(cancellationToken);
+
+            // 6. Fire the real-world HTTP transfer via Paystack
+            var transferSuccess = await _paystackService.InitiateWalletWithdrawalAsync(amountKobo, bankCode, accountNumber, withdrawalRef, cancellationToken);
+
+            if (!transferSuccess)
+            {
+                throw new InvalidOperationException("External bank network rejected the transfer execution.");
+            }
+
+            // 7. If everything succeeded, commit the database changes permanently
+            await dbTransaction.CommitAsync(cancellationToken);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            // If Paystack fails, or validation fails, rollback the wallet debit instantly
+            await dbTransaction.RollbackAsync(cancellationToken);
+            Console.WriteLine($"[WITHDRAWAL ABORT] {ex.Message}");
+            return false;
+        }
+    }
+
+    // Dynamically reads bank routings from appsettings.json without recompiling
+    private string ResolveCbnBankCode(string bankName)
+    {
+        var standardizedName = bankName.ToLower().Trim();
+        var bankCodes = _configuration.GetSection("BankCodes").GetChildren();
+
+        foreach (var bank in bankCodes)
+        {
+            if (standardizedName.Contains(bank.Key))
+            {
+                return bank.Value!;
+            }
+        }
+
+        throw new InvalidOperationException($"Bank routing code could not be dynamically resolved for '{bankName}'. Please contact support to map this institution.");
     }
 }
