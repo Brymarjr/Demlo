@@ -35,12 +35,14 @@ public class JwtTokenService : IJwtTokenService
         var securityKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(secretKey));
         var credentials = new SigningCredentials(securityKey, SecurityAlgorithms.HmacSha256);
 
-        var claims = new[]
+       var claims = new[]
         {
             new Claim(JwtRegisteredClaimNames.Sub, user.Id.ToString()),
             new Claim(JwtRegisteredClaimNames.Email, user.Email),
             new Claim(JwtRegisteredClaimNames.Jti, Guid.NewGuid().ToString()),
-            new Claim(ClaimTypes.Role, user.Role.ToString())
+            new Claim(ClaimTypes.Role, user.Role.ToString()),
+            new Claim(JwtRegisteredClaimNames.GivenName, user.FirstName ?? string.Empty), 
+            new Claim(JwtRegisteredClaimNames.FamilyName, user.LastName ?? string.Empty)   
         };
 
         var tokenDescriptor = new SecurityTokenDescriptor
