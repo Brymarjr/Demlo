@@ -5,15 +5,14 @@ using Demlo.Infrastructure.Persistence;
 
 namespace Demlo.Infrastructure.Services;
 
-// Implements the settlement engine tracking debt collections and ledger balance closures.
+// Implements the settlement engine tracking debt collections, ledger balance closures, and yield distributions.
 // Enforces Section 11.2 atomic transaction guardrails and dispatches receipt milestones.
 public class RepaymentService : IRepaymentService
 {
     private readonly DemloDbContext _context;
     private readonly ILoanService _loanService;
-    private readonly INotificationService _notificationService; // ◄ 1. Declare the private messaging field
+    private readonly INotificationService _notificationService;
 
-    // 2. Inject INotificationService into the constructor alongside existing dependencies
     public RepaymentService(
         DemloDbContext context,
         ILoanService loanService,
@@ -46,8 +45,7 @@ public class RepaymentService : IRepaymentService
 
     public async Task<bool> ProcessRepaymentAsync(Guid loanId, long amountKobo, CancellationToken cancellationToken = default)
     {
-        if (amountKobo <= 0)
-            throw new ArgumentException("Repayment allocation processing metric must be greater than zero kobo.");
+        if (amountKobo <= 0) throw new ArgumentException("Repayment processing metric must be greater than zero kobo.");
 
         using var dbTransaction = await _context.Database.BeginTransactionAsync(cancellationToken);
 
@@ -66,12 +64,9 @@ public class RepaymentService : IRepaymentService
             var user = await _context.Users.FirstOrDefaultAsync(u => u.Id == loan.BorrowerId, cancellationToken);
             if (user == null) return false;
 
+            // 1. Calculate Exact Debt and Prevent Overpayment
             long exactRemainingDebt = await CalculateOutstandingBalanceAsync(loanId, cancellationToken);
-            if (exactRemainingDebt <= 0)
-            {
-                Console.WriteLine($"[REPAYMENT ABORT] Loan asset {loanId} is already fully settled.");
-                return false;
-            }
+            if (exactRemainingDebt <= 0) return false;
 
             long actualDeductionKobo = amountKobo > exactRemainingDebt ? exactRemainingDebt : amountKobo;
 
@@ -81,10 +76,11 @@ public class RepaymentService : IRepaymentService
 
             if (currentWalletBalance < actualDeductionKobo)
             {
-                Console.WriteLine($"[REPAYMENT INSUFFICIENT] Borrower wallet lacks clear capital. Balance: {currentWalletBalance}, Needed: {actualDeductionKobo}");
+                Console.WriteLine($"[REPAYMENT INSUFFICIENT] Borrower wallet lacks clear capital. Needed: {actualDeductionKobo}");
                 return false;
             }
 
+            // 2. Debit the Borrower
             var paymentDebitRecord = new Domain.Entities.Transaction
             {
                 Id = Guid.NewGuid(),
@@ -94,28 +90,75 @@ public class RepaymentService : IRepaymentService
                 Description = $"Loan Repayment Settlement - Asset Reference ID: {loan.Id}",
                 Timestamp = DateTime.UtcNow
             };
-
             await _context.Transactions.AddAsync(paymentDebitRecord, cancellationToken);
-            await _context.SaveChangesAsync(cancellationToken);
 
+            // 3. ──► NEW: Yield Distribution to Fractional Lenders
+            var allocations = await _context.LoanAllocations.Where(a => a.LoanId == loanId).ToListAsync(cancellationToken);
+            
+            foreach (var allocation in allocations)
+            {
+                // Calculate proportional share
+                double sharePercentage = (double)allocation.AllocatedAmountKobo / loan.PrincipalAmountKobo;
+                long grossLenderShareKobo = (long)(actualDeductionKobo * sharePercentage);
+                
+                // Demlo Revenue: 5% flat platform fee on all capital returned
+                long platformFeeKobo = (long)(grossLenderShareKobo * 0.05);
+                long netLenderShareKobo = grossLenderShareKobo - platformFeeKobo;
+
+                var lenderWallet = await _context.Wallets.FirstOrDefaultAsync(w => w.UserId == allocation.LenderId, cancellationToken);
+                if (lenderWallet != null && netLenderShareKobo > 0)
+                {
+                    // Credit the Lender's internal ledger
+                    var lenderCredit = new Domain.Entities.Transaction
+                    {
+                        Id = Guid.NewGuid(),
+                        WalletId = lenderWallet.Id,
+                        AmountKobo = netLenderShareKobo,
+                        Type = "CREDIT",
+                        Description = $"Yield Distribution - Loan Ref: {loan.Id}",
+                        Timestamp = DateTime.UtcNow
+                    };
+                    await _context.Transactions.AddAsync(lenderCredit, cancellationToken);
+
+                    // Update the Lender's live portfolio metrics
+                    var lenderProfile = await _context.LenderProfiles.FirstOrDefaultAsync(p => p.UserId == allocation.LenderId, cancellationToken);
+                    if (lenderProfile != null)
+                    {
+                        lenderProfile.AvailableBalanceKobo += netLenderShareKobo;
+                        lenderProfile.TotalEarnedKobo += netLenderShareKobo; 
+                        _context.LenderProfiles.Update(lenderProfile);
+                    }
+                }
+            }
+
+            // 4. Resolve State Machine Transitions
             bool isFullySettled = (actualDeductionKobo == exactRemainingDebt);
             if (isFullySettled)
             {
                 Console.WriteLine($"[REPAYMENT MATCH] Debt completely zeroed out. Closing down contract pipeline context.");
                 await _loanService.UpdateLoanStatusAsync(loanId, LoanStatus.ClosedRepaid, cancellationToken);
+                
+                // Update allocation statuses
+                foreach(var allocation in allocations)
+                {
+                    allocation.Status = "SETTLED";
+                    _context.LoanAllocations.Update(allocation);
+                }
             }
 
+            // 5. Commit all moving parts to the database atomically
+            await _context.SaveChangesAsync(cancellationToken);
             await dbTransaction.CommitAsync(cancellationToken);
-            Console.WriteLine($"[REPAYMENT SUCCESS] Liquidated {actualDeductionKobo} Kobo against Asset {loanId}.");
+            Console.WriteLine($"[REPAYMENT SUCCESS] Liquidated {actualDeductionKobo} Kobo against Asset {loanId}. Yield distributed.");
 
-            // 3. AUTOMATED REPAYMENT TRANSACTION ALERT TRIGGER (PL-58)
+            // 6. Automated Receipt Milestone Alerts
             double repaidInNaira = actualDeductionKobo / 100.0;
             long postPaymentDebt = isFullySettled ? 0 : (exactRemainingDebt - actualDeductionKobo);
             double remainingInNaira = postPaymentDebt / 100.0;
 
             string smsPayloadText = isFullySettled
                 ? $"Demlo Alert: Repayment of NGN {repaidInNaira:N2} received! Your loan (ID: {loanId.ToString()[..8]}) is now FULLY SETTLED. Thank you!"
-                : $"Demlo Alert: Repayment of NGN {repaidInNaira:N2} received. Outstanding remaining balance: NGN {remainingInNaira:N2}.";
+                : $"Demlo Alert: Repayment of NGN {repaidInNaira:N2} received. Outstanding balance: NGN {remainingInNaira:N2}.";
 
             _ = _notificationService.SendSmsAsync(user.PhoneNumber ?? "+2348000000000", smsPayloadText, cancellationToken);
 

@@ -128,20 +128,21 @@ public class WalletService : IWalletService
         }
     }
 
-    // ──► NEW: Generate Paystack Deposit Checkout Link
+    // Generate Paystack Deposit Checkout Link
     public async Task<string> RequestDepositLinkAsync(Guid userId, long amountKobo, CancellationToken cancellationToken = default)
     {
         var user = await _context.Users.FindAsync(new object[] { userId }, cancellationToken);
         if (user == null) throw new InvalidOperationException("User identity not found.");
 
         string email = string.IsNullOrWhiteSpace(user.Email) ? "funding@demlo.com" : user.Email;
-        string reference = $"dep_{Guid.NewGuid():N}"; // Unique transaction reference
+        
+        // We embed the UserId directly into the reference string (Format: dep_{UserId}_{Guid})
+        string reference = $"dep_{userId:N}_{Guid.NewGuid():N}"; 
 
-        // Hand off to the Paystack service to generate the secure checkout URL
         return await _paystackService.InitializeDepositAsync(email, amountKobo, reference, cancellationToken);
     }
 
-    // ──► NEW: Execute External Wallet Cashout via Paystack Transfer
+    // Execute External Wallet Cashout via Paystack Transfer
     public async Task<bool> RequestWithdrawalAsync(Guid userId, long amountKobo, CancellationToken cancellationToken = default)
     {
         // 1. Setup atomic transaction context
@@ -212,6 +213,55 @@ public class WalletService : IWalletService
             // If Paystack fails, or validation fails, rollback the wallet debit instantly
             await dbTransaction.RollbackAsync(cancellationToken);
             Console.WriteLine($"[WITHDRAWAL ABORT] {ex.Message}");
+            return false;
+        }
+    }
+
+    // Safely parses the reference, checks idempotency, and credits the wallet
+    public async Task<bool> ProcessPaystackWebhookAsync(string reference, long amountKobo, CancellationToken cancellationToken = default)
+    {
+        // 1. Extract the UserId from the reference string
+        var parts = reference.Split('_');
+        if (parts.Length < 3 || parts[0] != "dep") return false;
+        if (!Guid.TryParse(parts[1], out var userId)) return false;
+
+        using var dbTransaction = await _context.Database.BeginTransactionAsync(cancellationToken);
+
+        try
+        {
+            var wallet = await _context.Wallets.FirstOrDefaultAsync(w => w.UserId == userId, cancellationToken);
+            if (wallet == null) return false;
+
+            // 2. Idempotency Check: Prevent double-crediting if Paystack fires the webhook twice
+            bool alreadyProcessed = await _context.Transactions.AnyAsync(t => t.Description.Contains(reference), cancellationToken);
+            if (alreadyProcessed) 
+            {
+                Console.WriteLine($"[WEBHOOK IDEMPOTENT] Reference {reference} already settled. Skipping duplicate.");
+                return true; 
+            }
+
+            // 3. Credit the Wallet
+            var creditRecord = new Domain.Entities.Transaction
+            {
+                Id = Guid.NewGuid(),
+                WalletId = wallet.Id,
+                AmountKobo = amountKobo,
+                Type = "CREDIT",
+                Description = $"Paystack Wallet Funding - Ref: {reference}",
+                Timestamp = DateTime.UtcNow
+            };
+
+            await _context.Transactions.AddAsync(creditRecord, cancellationToken);
+            await _context.SaveChangesAsync(cancellationToken);
+            await dbTransaction.CommitAsync(cancellationToken);
+
+            Console.WriteLine($"[WEBHOOK SUCCESS] Wallet {wallet.Id} physically funded with {amountKobo} kobo via external gateway.");
+            return true;
+        }
+        catch (Exception ex)
+        {
+            await dbTransaction.RollbackAsync(cancellationToken);
+            Console.WriteLine($"[WEBHOOK FAULT] Ledger commit failed: {ex.Message}");
             return false;
         }
     }
