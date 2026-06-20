@@ -22,10 +22,6 @@ public static class DependencyInjection
         // Register our cryptographic identity token factor service
         services.AddTransient<IJwtTokenService, JwtTokenService>();
 
-        // Register the typed HttpClient pattern for Termii integration.
-        // Optimizes connection pooling and prevents socket leaks.
-        services.AddHttpClient<ISmsService, TermiiSmsService>();
-
         // Register the StackExchange Redis distributed cache provider.
         // Fulfills Section 6.2 caching and expiration rules.
         services.AddStackExchangeRedisCache(options =>

@@ -36,7 +36,6 @@ public class LedgerIntegrationTests
         // Instantiate a manual dummy Paystack service
         var dummyPaystackService = new DummyPaystackService();
 
-        // ──► FIXED: Changed _context to context
         var walletService = new WalletService(context, dummyPaystackService, configuration);
 
         var senderId = Guid.NewGuid();
@@ -82,7 +81,10 @@ public class LedgerIntegrationTests
     {
         // 1. ARRANGE: Build mock implementations of dependencies to isolate memory contexts
         var context = GetInMemoryDbContext();
-        var loanService = new LoanService(context, new NotificationService());
+        
+        // ──► FIXED: Swapped real NotificationService for the silent Mock
+        var loanService = new LoanService(context, new MockNotificationService());
+        
         var mockBureauService = new MockCreditBureauService(750);
         var mockPolicyEngine = new MockGlobalPolicyEngine("550");
 
@@ -135,7 +137,7 @@ public class LedgerIntegrationTests
         }
     }
 
-    // ──► FIXED: Moved inside the LedgerIntegrationTests class so the compiler can access it
+    // Manual mock to satisfy the IPaystackDisbursementService contract during ledger tests
     private class DummyPaystackService : IPaystackDisbursementService
     {
         public Task<bool> InitiateLoanDisbursementAsync(Guid loanId, CancellationToken cancellationToken) => Task.FromResult(true);
@@ -143,4 +145,13 @@ public class LedgerIntegrationTests
         public Task<bool> InitiateWalletWithdrawalAsync(long amountKobo, string bankCode, string accountNumber, string reference, CancellationToken cancellationToken = default) => Task.FromResult(true);
     }
 
-} 
+    // Lightweight mock companion to ensure tests don't fire real SMS messages and drain Termii credits
+    private class MockNotificationService : INotificationService
+    {
+        public Task<bool> SendEmailAsync(string toEmail, string subject, string body, CancellationToken cancellationToken = default) 
+            => Task.FromResult(true);
+
+        public Task<bool> SendSmsAsync(string toPhoneNumber, string message, CancellationToken cancellationToken = default) 
+            => Task.FromResult(true);
+    }
+}

@@ -18,7 +18,7 @@ public class UserService : IUserService
 {
     private readonly DemloDbContext _context;
     private readonly ISecurityService _securityService;
-    private readonly ISmsService _smsService;
+    private readonly INotificationService _notificationService;
     private readonly IDistributedCache _cache;
     private readonly IJwtTokenService _tokenService;
     private readonly IKycService _kycService;
@@ -27,14 +27,14 @@ public class UserService : IUserService
     public UserService(
         DemloDbContext context,
         ISecurityService securityService,
-        ISmsService smsService,
+        INotificationService notificationService,
         IDistributedCache cache,
         IJwtTokenService tokenService,
         IKycService kycService)
     {
         _context = context;
         _securityService = securityService;
-        _smsService = smsService;
+       _notificationService = notificationService;
         _cache = cache;
         _tokenService = tokenService;
         _kycService = kycService;
@@ -126,10 +126,10 @@ public class UserService : IUserService
                 };
                 await _cache.SetStringAsync(cacheKey, otpCode, cacheOptions, cancellationToken);
 
-                // 8. Fire OTP Outbound via Termii Communication Gateway
+                // 8. Fire OTP Outbound via Notification Service
                 // Executed asynchronously right before transaction completion
-                var smsDispatched = await _smsService.SendVerificationOtpAsync(user.PhoneNumber, otpCode, cancellationToken);
-                if (!smsDispatched)
+                var notificationSent = await _notificationService.SendSmsAsync(user.PhoneNumber, $"Your verification code is: {otpCode}", cancellationToken);
+                if (!notificationSent)
                 {
                     Console.WriteLine($"[WARNING] Automated OTP notification delivery failed for user: {user.Id}");
                 }
