@@ -11,4 +11,7 @@ public interface IOpenBankingService
 
     // Synchronizes and updates live banking metadata and ledger history for a specific user.
     Task<bool> SynchronizeAccountTelemetryAsync(User user, string accountId, CancellationToken cancellationToken = default);
+
+    // Fetches the physical routing details needed for Paystack withdrawals
+    Task<(string AccountNumber, string BankName)> GetAccountDetailsAsync(string accountId, CancellationToken cancellationToken = default);
 }

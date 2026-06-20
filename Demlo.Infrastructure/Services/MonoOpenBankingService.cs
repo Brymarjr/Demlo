@@ -83,4 +83,40 @@ public class MonoOpenBankingService : IOpenBankingService
             return false;
         }
     }
+
+    // Extracts the real-world bank details from Mono's secure vault
+    public async Task<(string AccountNumber, string BankName)> GetAccountDetailsAsync(string accountId, CancellationToken cancellationToken = default)
+    {
+        var secretKey = _configuration["MonoSettings:SecretKey"] ?? throw new InvalidOperationException("Mono Secret Key is unconfigured.");
+        var baseUrl = _configuration["MonoSettings:BaseUrl"] ?? "https://api.withmono.com";
+
+        var requestUrl = $"{baseUrl.TrimEnd('/')}/accounts/{accountId}";
+
+        _httpClient.DefaultRequestHeaders.Clear();
+        _httpClient.DefaultRequestHeaders.Add("mono-sec-key", secretKey);
+        _httpClient.DefaultRequestHeaders.Add("accept", "application/json");
+
+        try
+        {
+            var response = await _httpClient.GetAsync(requestUrl, cancellationToken);
+            if (!response.IsSuccessStatusCode)
+            {
+                throw new InvalidOperationException($"Mono Gateway rejected account identity fetch. Status: {response.StatusCode}");
+            }
+
+            var responseString = await response.Content.ReadAsStringAsync(cancellationToken);
+            using var doc = JsonDocument.Parse(responseString);
+            var accountElement = doc.RootElement.GetProperty("account");
+
+            string accountNumber = accountElement.GetProperty("accountNumber").GetString() ?? string.Empty;
+            string bankName = accountElement.GetProperty("institution").GetProperty("name").GetString() ?? string.Empty;
+
+            return (accountNumber, bankName);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[CRITICAL MONO FAULT] Account Identity Fetch Failure: {ex.Message}");
+            throw;
+        }
+    }
 }
