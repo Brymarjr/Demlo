@@ -31,4 +31,12 @@ public record RegisterUserDto
 
     [Required(ErrorMessage = "User role track is required.")]
     public string Role { get; init; } = string.Empty;
+
+    [Required(ErrorMessage = "First name is required.")]
+    [StringLength(50)]
+    public string FirstName { get; init; } = string.Empty;
+
+    [Required(ErrorMessage = "Last name is required.")]
+    [StringLength(50)]
+    public string LastName { get; init; } = string.Empty;
 }

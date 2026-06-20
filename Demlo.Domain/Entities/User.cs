@@ -30,4 +30,7 @@ public class User : BaseEntity
 
     // The current state of the user's Know Your Customer onboarding pipeline verification.
     public string KycStatus { get; set; } = string.Empty;
+
+    public string FirstName { get; set; } = string.Empty;
+    public string LastName { get; set; } = string.Empty;
 }

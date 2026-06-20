@@ -76,6 +76,8 @@ public class UserService : IUserService
 
                 var user = new User
                 {
+                    FirstName = request.FirstName, 
+                    LastName = request.LastName,   
                     Email = request.Email.ToLowerInvariant(),
                     PhoneNumber = request.PhoneNumber,
                     PasswordHash = passwordHash,
