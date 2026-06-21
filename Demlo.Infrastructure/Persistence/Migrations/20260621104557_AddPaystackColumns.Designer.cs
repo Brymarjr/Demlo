@@ -3,17 +3,20 @@ using System;
 using Demlo.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 using Npgsql.EntityFrameworkCore.PostgreSQL.Metadata;
 
 #nullable disable
 
-namespace Demlo.Infrastructure.Migrations
+namespace Demlo.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(DemloDbContext))]
-    partial class DemloDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260621104557_AddPaystackColumns")]
+    partial class AddPaystackColumns
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

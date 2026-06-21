@@ -12,3 +12,8 @@ obj/
 # Node files for our upcoming Next.js project
 node_modules/
 .next/
+
+#Application Secrets and Local Configurations
+appsettings.Development.json
+appsettings.Local.json
+*.env

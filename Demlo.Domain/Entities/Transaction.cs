@@ -8,4 +8,6 @@ public class Transaction
     public string Type { get; set; } = string.Empty; // "CREDIT" or "DEBIT"
     public string Description { get; set; } = string.Empty;
     public DateTime Timestamp { get; set; } = DateTime.UtcNow;
+    public string Status { get; set; } = string.Empty;
+    public string Reference { get; set; } = string.Empty;
 }

@@ -217,7 +217,7 @@ public class WalletService : IWalletService
         }
     }
 
-    // Safely parses the reference, checks idempotency, and credits the wallet
+    // Safely parses the reference, checks idempotency, and credits the wallet + double-entry ledger
     public async Task<bool> ProcessPaystackWebhookAsync(string reference, long amountKobo, CancellationToken cancellationToken = default)
     {
         // 1. Extract the UserId from the reference string
@@ -240,7 +240,7 @@ public class WalletService : IWalletService
                 return true; 
             }
 
-            // 3. Credit the Wallet
+            // 3. Credit the User's Wallet (Your Original Logic)
             var creditRecord = new Domain.Entities.Transaction
             {
                 Id = Guid.NewGuid(),
@@ -250,12 +250,32 @@ public class WalletService : IWalletService
                 Description = $"Paystack Wallet Funding - Ref: {reference}",
                 Timestamp = DateTime.UtcNow
             };
-
             await _context.Transactions.AddAsync(creditRecord, cancellationToken);
+
+            // 4. DOUBLE-ENTRY LEDGER ROUTING 
+            var ledgerEntry = new Domain.Entities.LedgerEntry
+            {
+                DebitAccountId = Guid.Empty, // Virtual Debit to External Gateway
+                CreditAccountId = Demlo.Domain.Constants.SystemAccounts.PlatformEscrow, // Credit the Escrow Liability
+                AmountKobo = amountKobo,
+                Type = "DEPOSIT",
+                ReferenceId = creditRecord.Id // Link to the wallet transaction
+            };
+            await _context.LedgerEntries.AddAsync(ledgerEntry, cancellationToken);
+
+            // Update the physical Escrow Account Balance
+            var escrowAccount = await _context.LedgerAccounts.FirstOrDefaultAsync(a => a.OwnerId == Demlo.Domain.Constants.SystemAccounts.PlatformEscrow, cancellationToken);
+            if (escrowAccount != null)
+            {
+                escrowAccount.BalanceKobo += amountKobo;
+                _context.LedgerAccounts.Update(escrowAccount);
+            }
+            // ───────────────────────────────────────────
+
             await _context.SaveChangesAsync(cancellationToken);
             await dbTransaction.CommitAsync(cancellationToken);
 
-            Console.WriteLine($"[WEBHOOK SUCCESS] Wallet {wallet.Id} physically funded with {amountKobo} kobo via external gateway.");
+            Console.WriteLine($"[WEBHOOK SUCCESS] Wallet {wallet.Id} funded and Ledger Settled with {amountKobo} kobo.");
             return true;
         }
         catch (Exception ex)
