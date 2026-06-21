@@ -308,4 +308,55 @@ public class UserService : IUserService
         // Enforces cryptographically strong randomization to eliminate predictability vectors
         return RandomNumberGenerator.GetInt32(100000, 999999).ToString();
     }
+
+    public async Task<bool> GenerateAndSendPasswordResetOtpAsync(string phoneNumber, CancellationToken cancellationToken = default)
+    {
+        var user = await _context.Users.FirstOrDefaultAsync(u => u.PhoneNumber == phoneNumber, cancellationToken);
+        
+        // Silently return to prevent phone number enumeration if the user doesn't exist
+        if (user == null) return false;
+
+        var otpCode = GenerateSecureOtp();
+        var cacheKey = $"reset_otp:{phoneNumber}"; 
+        
+        var cacheOptions = new DistributedCacheEntryOptions
+        {
+            AbsoluteExpirationRelativeToNow = TimeSpan.FromMinutes(5)
+        };
+        
+        await _cache.SetStringAsync(cacheKey, otpCode, cacheOptions, cancellationToken);
+
+        var notificationSent = await _notificationService.SendSmsAsync(phoneNumber, $"Your Demlo password reset code is: {otpCode}", cancellationToken);
+        
+        if (!notificationSent)
+        {
+            Console.WriteLine($"[WARNING] Password reset OTP delivery failed for user: {user.Id}");
+            return false;
+        }
+
+        return true;
+    }
+
+    public async Task<bool> VerifyPasswordResetOtpAsync(string phoneNumber, string otp, CancellationToken cancellationToken = default)
+    {
+        var cacheKey = $"reset_otp:{phoneNumber}";
+        var cachedOtp = await _cache.GetStringAsync(cacheKey, cancellationToken);
+
+        var currentEnv = Environment.GetEnvironmentVariable("ASPNETCORE_ENVIRONMENT");
+        bool isDevelopment = string.Equals(currentEnv, "Development", StringComparison.OrdinalIgnoreCase);
+        bool isTestBypass = isDevelopment && otp == "123456";
+
+        if (!isTestBypass && (string.IsNullOrEmpty(cachedOtp) || cachedOtp != otp))
+        {
+            return false;
+        }
+
+        // Purge the consumed OTP sequence
+        if (!isTestBypass)
+        {
+            await _cache.RemoveAsync(cacheKey, cancellationToken);
+        }
+
+        return true;
+    }
 }

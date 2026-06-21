@@ -33,4 +33,10 @@ public class User : BaseEntity
 
     public string FirstName { get; set; } = string.Empty;
     public string LastName { get; set; } = string.Empty;
+
+    // Flag to enforce mandatory password rotation upon first login for administratively provisioned accounts.
+    public bool IsTemporaryPassword { get; set; } = false;
+
+    // Audit tracking for the last time the credential hash was updated.
+    public DateTime? LastPasswordChangedAt { get; set; }
 }

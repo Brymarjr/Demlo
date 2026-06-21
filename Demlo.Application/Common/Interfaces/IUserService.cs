@@ -14,4 +14,10 @@ public interface IUserService
     // Processes a token swap request by validating sessions and enforcing rotation rules.
     // Returns a populated DTO package carrying fresh access and refresh token keys.
     Task<TokenResponseDto> RefreshTokenAsync(TokenRequestDto request, CancellationToken cancellationToken = default);
+
+    // Generates and dispatches a secure OTP for password reset via SMS.
+    Task<bool> GenerateAndSendPasswordResetOtpAsync(string phoneNumber, CancellationToken cancellationToken = default);
+
+    // Validates a password reset OTP against the Redis cache without altering KYC status.
+    Task<bool> VerifyPasswordResetOtpAsync(string phoneNumber, string otp, CancellationToken cancellationToken = default);
 }

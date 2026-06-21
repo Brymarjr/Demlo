@@ -69,6 +69,8 @@ public static class DependencyInjection
         // Register the Profile Service for Tier-1 Onboarding
         services.AddScoped<IProfileService, ProfileService>();
 
+        services.AddScoped<IEmailService, SmtpEmailService>();
+
         return services;
     }
 }
