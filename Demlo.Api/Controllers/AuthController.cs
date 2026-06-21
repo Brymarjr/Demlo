@@ -125,9 +125,12 @@ public class AuthController : ControllerBase
     {
         try
         {
-            // 1. Fetch user by their PhoneNumber property contract natively
+            // Normalize the incoming phone string to E.164 before querying the database
+            var normalizedPhone = PhoneUtil.NormalizePhoneNumber(request.Phone);
+
+            // 1. Fetch user by their normalized PhoneNumber property contract
             var user = await _context.Users
-                .FirstOrDefaultAsync(u => u.PhoneNumber == request.Phone, cancellationToken);
+                .FirstOrDefaultAsync(u => u.PhoneNumber == normalizedPhone, cancellationToken);
 
             if (user == null)
             {
@@ -240,6 +243,7 @@ public class AuthController : ControllerBase
             // Hash the new password and flip the invariant state
             user.PasswordHash = _securityService.HashPassword(request.NewPassword);
             user.IsTemporaryPassword = false;
+            user.KycStatus = "VERIFIED"; // Activate the admin profile upon successful rotation
             user.UpdatedAt = DateTime.UtcNow;
 
             _context.Users.Update(user);

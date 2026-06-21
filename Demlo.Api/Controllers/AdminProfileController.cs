@@ -63,11 +63,25 @@ public class AdminProfileController : ControllerBase
         await _context.Users.AddAsync(newAdmin, cancellationToken);
         await _context.SaveChangesAsync(cancellationToken);
 
-        // ◄ PRODUCTION RUNTIME: Explicitly dispatch credentials to the administrator securely
+        // Explicitly dispatch credentials to the administrator securely
         string emailSubject = "Demlo Administrative Console Enrollment";
         string emailBody = $"Hello {request.FirstName},\n\nYour administrative account has been provisioned. Use the following temporary credentials to log in:\n\nTemporary Password: {tempPassword}\n\nUpon successful authentication, you will be required to execute an immediate credential rotation.\n\nRegards,\nDemlo Engineering";
         
-        await _emailService.SendEmailAsync(newAdmin.Email, emailSubject, emailBody, cancellationToken);
+        try
+        {
+            await _emailService.SendEmailAsync(newAdmin.Email, emailSubject, emailBody, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            // Prevents SMTP network timeouts from crashing the API
+            Console.WriteLine($"\n[NETWORK WARNING] SMTP Email dispatch failed: {ex.Message}");
+            Console.WriteLine($"[LOCAL DEV BYPASS] Admin created successfully. Temporary Password is: {tempPassword}\n");
+            
+            return StatusCode(StatusCodes.Status201Created, new {
+                message = "Administrative profile provisioned, but email dispatch failed due to network timeout. Check server logs.",
+                adminId = newAdmin.Id
+            });
+        }
 
         return StatusCode(StatusCodes.Status201Created, new {
             message = "Administrative profile successfully provisioned. Credentials dispatched to email securely.",
