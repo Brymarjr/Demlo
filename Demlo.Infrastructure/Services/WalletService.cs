@@ -145,7 +145,6 @@ public class WalletService : IWalletService
     // Execute External Wallet Cashout via Paystack Transfer
     public async Task<bool> RequestWithdrawalAsync(Guid userId, long amountKobo, CancellationToken cancellationToken = default)
     {
-        // 1. Setup atomic transaction context
         using var dbTransaction = await _context.Database.BeginTransactionAsync(cancellationToken);
 
         try
@@ -155,48 +154,68 @@ public class WalletService : IWalletService
 
             if (user == null || wallet == null) throw new InvalidOperationException("Financial structures not found.");
 
-            // 2. Validate liquidity
             var currentBalance = await GetWalletBalanceAsync(userId, cancellationToken);
             if (currentBalance < amountKobo) throw new InvalidOperationException("Insufficient clear balance for withdrawal.");
 
-            // 3. Extract verified banking details based on the user's role architecture
             string accountNumber = string.Empty;
             string bankName = string.Empty;
 
-            if (user.Role == UserRole.Borrower)
-            {
-                var profile = await _context.BorrowerProfiles.FirstOrDefaultAsync(p => p.UserId == userId, cancellationToken);
-                if (profile == null || string.IsNullOrEmpty(profile.BankAccountNumber)) throw new InvalidOperationException("Borrower has no linked bank account.");
-                accountNumber = profile.BankAccountNumber;
-                bankName = profile.BankName;
-            }
-            else if (user.Role == UserRole.Lender)
-            {
-                var profile = await _context.LenderProfiles.FirstOrDefaultAsync(p => p.UserId == userId, cancellationToken);
-                if (profile == null || string.IsNullOrEmpty(profile.BankAccountNumber)) throw new InvalidOperationException("Lender has no linked bank account.");
-                accountNumber = profile.BankAccountNumber;
-                bankName = profile.BankName;
-            }
+            // Simplified to just Lender since Borrowers don't withdraw cash deposits directly
+            var profile = await _context.LenderProfiles.FirstOrDefaultAsync(p => p.UserId == userId, cancellationToken);
+            if (profile == null || string.IsNullOrEmpty(profile.BankAccountNumber)) throw new InvalidOperationException("Lender has no linked bank account.");
+            
+            accountNumber = profile.BankAccountNumber;
+            bankName = profile.BankName;
 
-            // 4. Resolve the CBN 3-digit bank code required by NIBSS/Paystack
             string bankCode = ResolveCbnBankCode(bankName);
-
-            // 5. Instantly debit the user's internal Demlo wallet (to prevent double-spending during API transit)
             string withdrawalRef = $"wth_{Guid.NewGuid():N}";
+
+            // 1. Instantly debit wallet (NOW WITH STATUS & REFERENCE)
             var debitRecord = new Domain.Entities.Transaction
             {
                 Id = Guid.NewGuid(),
                 WalletId = wallet.Id,
                 AmountKobo = amountKobo,
                 Type = "DEBIT",
+                Status = "PENDING", // PENDING until Paystack confirms via future transfer webhook
+                Reference = withdrawalRef,
                 Description = $"External Bank Withdrawal to {bankName}",
                 Timestamp = DateTime.UtcNow
             };
 
             await _context.Transactions.AddAsync(debitRecord, cancellationToken);
+
+            // 2. DOUBLE-ENTRY LEDGER ROUTING FOR WITHDRAWAL 
+            var escrowAccount = await _context.LedgerAccounts.FirstOrDefaultAsync(a => a.OwnerId == Demlo.Domain.Constants.SystemAccounts.PlatformEscrow, cancellationToken);
+            var gatewayAccount = await _context.LedgerAccounts.FirstOrDefaultAsync(a => a.OwnerId == Guid.Empty, cancellationToken);
+
+            if (escrowAccount == null || gatewayAccount == null) 
+                throw new InvalidOperationException("System Ledger integrity failure. Master accounts missing.");
+
+            var ledgerEntry = new Domain.Entities.LedgerEntry
+            {
+                DebitAccountId = escrowAccount.Id,      
+                CreditAccountId = gatewayAccount.Id,    
+                AmountKobo = amountKobo,
+                Type = "WITHDRAWAL",
+                ReferenceId = debitRecord.Id
+            };
+            
+            await _context.LedgerEntries.AddAsync(ledgerEntry, cancellationToken);
+
+            // 3. Update BOTH Physical Balances 
+            escrowAccount.BalanceKobo -= amountKobo;
+            gatewayAccount.BalanceKobo -= amountKobo;
+            _context.LedgerAccounts.Update(escrowAccount);
+            _context.LedgerAccounts.Update(gatewayAccount);
+
+            // 4. Sync Lender Profile Summary Cache
+            profile.AvailableBalanceKobo -= amountKobo;
+            _context.LenderProfiles.Update(profile);
+
             await _context.SaveChangesAsync(cancellationToken);
 
-            // 6. Fire the real-world HTTP transfer via Paystack
+            // 5. Fire the real-world HTTP transfer via Paystack
             var transferSuccess = await _paystackService.InitiateWalletWithdrawalAsync(amountKobo, bankCode, accountNumber, withdrawalRef, cancellationToken);
 
             if (!transferSuccess)
@@ -204,13 +223,11 @@ public class WalletService : IWalletService
                 throw new InvalidOperationException("External bank network rejected the transfer execution.");
             }
 
-            // 7. If everything succeeded, commit the database changes permanently
             await dbTransaction.CommitAsync(cancellationToken);
             return true;
         }
         catch (Exception ex)
         {
-            // If Paystack fails, or validation fails, rollback the wallet debit instantly
             await dbTransaction.RollbackAsync(cancellationToken);
             Console.WriteLine($"[WITHDRAWAL ABORT] {ex.Message}");
             return false;
@@ -231,30 +248,31 @@ public class WalletService : IWalletService
             var wallet = await _context.Wallets.FirstOrDefaultAsync(w => w.UserId == userId, cancellationToken);
             if (wallet == null) return false;
 
-            bool alreadyProcessed = await _context.Transactions.AnyAsync(t => t.Description.Contains(reference), cancellationToken);
+            bool alreadyProcessed = await _context.Transactions.AnyAsync(t => t.Reference == reference, cancellationToken);
             if (alreadyProcessed) 
             {
                 Console.WriteLine($"[WEBHOOK IDEMPOTENT] Reference {reference} already settled. Skipping duplicate.");
                 return true; 
             }
 
-            // 1. Credit the User's Wallet
+            // 1. Credit the User's Wallet (NOW WITH STATUS & REFERENCE)
             var creditRecord = new Domain.Entities.Transaction
             {
                 Id = Guid.NewGuid(),
                 WalletId = wallet.Id,
                 AmountKobo = amountKobo,
                 Type = "CREDIT",
+                Status = "SUCCESS", 
+                Reference = reference, 
                 Description = $"Paystack Wallet Funding - Ref: {reference}",
                 Timestamp = DateTime.UtcNow
             };
             await _context.Transactions.AddAsync(creditRecord, cancellationToken);
 
-            // ──► 2. FETCH ACCOUNTS FOR FOREIGN KEYS ◄──
+            // 2. FETCH ACCOUNTS FOR FOREIGN KEYS 
             var escrowAccount = await _context.LedgerAccounts.FirstOrDefaultAsync(a => a.OwnerId == Demlo.Domain.Constants.SystemAccounts.PlatformEscrow, cancellationToken);
             if (escrowAccount == null) throw new InvalidOperationException("System Escrow account is missing from the database.");
 
-            // Create or fetch a virtual Gateway Account for the external Paystack funds
             var gatewayAccount = await _context.LedgerAccounts.FirstOrDefaultAsync(a => a.OwnerId == Guid.Empty, cancellationToken);
             if (gatewayAccount == null)
             {
@@ -267,24 +285,34 @@ public class WalletService : IWalletService
                     CreatedAt = DateTime.UtcNow
                 };
                 await _context.LedgerAccounts.AddAsync(gatewayAccount, cancellationToken);
-                await _context.SaveChangesAsync(cancellationToken); // Save to generate the physical Id
+                await _context.SaveChangesAsync(cancellationToken); 
             }
 
-            // ──► 3. DOUBLE-ENTRY LEDGER ROUTING (Using actual Db Ids) ◄──
+            // 3. DOUBLE-ENTRY LEDGER ROUTING 
             var ledgerEntry = new Domain.Entities.LedgerEntry
             {
-                DebitAccountId = gatewayAccount.Id,      // Virtual External Debit
-                CreditAccountId = escrowAccount.Id,      // Credit the Escrow Liability
+                DebitAccountId = gatewayAccount.Id,      
+                CreditAccountId = escrowAccount.Id,      
                 AmountKobo = amountKobo,
                 Type = "DEPOSIT",
                 ReferenceId = creditRecord.Id 
             };
             await _context.LedgerEntries.AddAsync(ledgerEntry, cancellationToken);
 
-            // 4. Update the physical Escrow Account Balance
+            // 4. Update BOTH Physical Account Balances
             escrowAccount.BalanceKobo += amountKobo;
+            gatewayAccount.BalanceKobo += amountKobo;
             _context.LedgerAccounts.Update(escrowAccount);
-            // ───────────────────────────────────────────
+            _context.LedgerAccounts.Update(gatewayAccount);
+
+            // 5. Sync the Lender Profile Summary Cache
+            var lenderProfile = await _context.LenderProfiles.FirstOrDefaultAsync(p => p.UserId == userId, cancellationToken);
+            if (lenderProfile != null)
+            {
+                lenderProfile.AvailableBalanceKobo += amountKobo;
+                lenderProfile.TotalDepositedKobo += amountKobo;
+                _context.LenderProfiles.Update(lenderProfile);
+            }
 
             await _context.SaveChangesAsync(cancellationToken);
             await dbTransaction.CommitAsync(cancellationToken);
