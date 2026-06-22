@@ -21,6 +21,7 @@
   <ItemGroup>
     <ProjectReference Include="..\Demlo.Application\Demlo.Application.csproj" />
     <ProjectReference Include="..\Demlo.Infrastructure\Demlo.Infrastructure.csproj" />
+    <ProjectReference Include="..\Demlo.Workers\Demlo.Workers.csproj" />
   </ItemGroup>
 
 </Project>

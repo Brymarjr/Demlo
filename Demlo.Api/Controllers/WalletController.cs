@@ -4,6 +4,8 @@ using Asp.Versioning;
 using Demlo.Application.Common.Interfaces;
 using Demlo.Application.DTOs;
 using System.Security.Claims;
+using Demlo.Workers.Jobs;
+using Demlo.Infrastructure.Persistence;
 
 namespace Demlo.Api.Controllers;
 
@@ -164,6 +166,27 @@ public class WalletController : ControllerBase
         {
             Console.WriteLine($"[WEBHOOK PARSE FAULT] {ex.Message}");
             return StatusCode(500); // 500 tells Paystack to retry later
+        }
+    }
+
+    // On-Demand Ledger Audit (Restricted to Admins)
+    [HttpPost("trigger-audit")]
+    [Authorize(Roles = "Admin")] // Only Admins can fire this
+    public async Task<IActionResult> TriggerNightlyAudit([FromServices] DemloDbContext context)
+    {
+        try
+        {
+            var job = new LedgerBalancingJob(context);
+            await job.RunNightlyBalancingAuditAsync(CancellationToken.None);
+            
+            return Ok(new { 
+                status = "Success",
+                message = "Enterprise ledger reconciliation completed successfully. Audit record generated." 
+            });
+        }
+        catch (Exception ex)
+        {
+            return StatusCode(500, new { error = "Audit sequence failed.", detail = ex.Message });
         }
     }
 
