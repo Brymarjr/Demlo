@@ -220,7 +220,6 @@ public class WalletService : IWalletService
     // Safely parses the reference, checks idempotency, and credits the wallet + double-entry ledger
     public async Task<bool> ProcessPaystackWebhookAsync(string reference, long amountKobo, CancellationToken cancellationToken = default)
     {
-        // 1. Extract the UserId from the reference string
         var parts = reference.Split('_');
         if (parts.Length < 3 || parts[0] != "dep") return false;
         if (!Guid.TryParse(parts[1], out var userId)) return false;
@@ -232,7 +231,6 @@ public class WalletService : IWalletService
             var wallet = await _context.Wallets.FirstOrDefaultAsync(w => w.UserId == userId, cancellationToken);
             if (wallet == null) return false;
 
-            // 2. Idempotency Check: Prevent double-crediting if Paystack fires the webhook twice
             bool alreadyProcessed = await _context.Transactions.AnyAsync(t => t.Description.Contains(reference), cancellationToken);
             if (alreadyProcessed) 
             {
@@ -240,7 +238,7 @@ public class WalletService : IWalletService
                 return true; 
             }
 
-            // 3. Credit the User's Wallet (Your Original Logic)
+            // 1. Credit the User's Wallet
             var creditRecord = new Domain.Entities.Transaction
             {
                 Id = Guid.NewGuid(),
@@ -252,24 +250,40 @@ public class WalletService : IWalletService
             };
             await _context.Transactions.AddAsync(creditRecord, cancellationToken);
 
-            // 4. DOUBLE-ENTRY LEDGER ROUTING 
+            // ──► 2. FETCH ACCOUNTS FOR FOREIGN KEYS ◄──
+            var escrowAccount = await _context.LedgerAccounts.FirstOrDefaultAsync(a => a.OwnerId == Demlo.Domain.Constants.SystemAccounts.PlatformEscrow, cancellationToken);
+            if (escrowAccount == null) throw new InvalidOperationException("System Escrow account is missing from the database.");
+
+            // Create or fetch a virtual Gateway Account for the external Paystack funds
+            var gatewayAccount = await _context.LedgerAccounts.FirstOrDefaultAsync(a => a.OwnerId == Guid.Empty, cancellationToken);
+            if (gatewayAccount == null)
+            {
+                gatewayAccount = new Domain.Entities.LedgerAccount
+                {
+                    Id = Guid.NewGuid(),
+                    OwnerId = Guid.Empty,
+                    AccountType = "ASSET",
+                    BalanceKobo = 0,
+                    CreatedAt = DateTime.UtcNow
+                };
+                await _context.LedgerAccounts.AddAsync(gatewayAccount, cancellationToken);
+                await _context.SaveChangesAsync(cancellationToken); // Save to generate the physical Id
+            }
+
+            // ──► 3. DOUBLE-ENTRY LEDGER ROUTING (Using actual Db Ids) ◄──
             var ledgerEntry = new Domain.Entities.LedgerEntry
             {
-                DebitAccountId = Guid.Empty, // Virtual Debit to External Gateway
-                CreditAccountId = Demlo.Domain.Constants.SystemAccounts.PlatformEscrow, // Credit the Escrow Liability
+                DebitAccountId = gatewayAccount.Id,      // Virtual External Debit
+                CreditAccountId = escrowAccount.Id,      // Credit the Escrow Liability
                 AmountKobo = amountKobo,
                 Type = "DEPOSIT",
-                ReferenceId = creditRecord.Id // Link to the wallet transaction
+                ReferenceId = creditRecord.Id 
             };
             await _context.LedgerEntries.AddAsync(ledgerEntry, cancellationToken);
 
-            // Update the physical Escrow Account Balance
-            var escrowAccount = await _context.LedgerAccounts.FirstOrDefaultAsync(a => a.OwnerId == Demlo.Domain.Constants.SystemAccounts.PlatformEscrow, cancellationToken);
-            if (escrowAccount != null)
-            {
-                escrowAccount.BalanceKobo += amountKobo;
-                _context.LedgerAccounts.Update(escrowAccount);
-            }
+            // 4. Update the physical Escrow Account Balance
+            escrowAccount.BalanceKobo += amountKobo;
+            _context.LedgerAccounts.Update(escrowAccount);
             // ───────────────────────────────────────────
 
             await _context.SaveChangesAsync(cancellationToken);
